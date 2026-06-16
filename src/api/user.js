@@ -159,7 +159,11 @@ function user(inputToken) {
       return this.getProfile();
     } catch (error) {
       console.log(error);
-      return error;
+      return {
+        error: true,
+        status: error.response?.status,
+        message: error.message,
+      };
     }
   };
 
@@ -173,7 +177,11 @@ function user(inputToken) {
       return this.getProfile();
     } catch (error) {
       console.log(error);
-      return error;
+      return {
+        error: true,
+        status: error.response?.status,
+        message: error.message,
+      };
     }
   };
 
@@ -187,7 +195,11 @@ function user(inputToken) {
       return this.getProfile();
     } catch (error) {
       console.log(error);
-      return error;
+      return {
+        error: true,
+        status: error.response?.status,
+        message: error.message,
+      };
     }
   };
 
@@ -278,7 +290,11 @@ function user(inputToken) {
       return this.getProfile();
     } catch (error) {
       console.log(error);
-      return error;
+      return {
+        error: true,
+        status: error.response?.status,
+        message: error.message,
+      };
     }
   };
 

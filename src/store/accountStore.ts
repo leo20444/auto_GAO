@@ -120,7 +120,7 @@ async function refreshAccountState(acc: Account, forceAll = false) {
   try {
     const profile = await acc.userObj.getProfile();
     if (profile) {
-      Object.assign(acc.profile, profile);
+      safeUpdateProfile(acc, profile);
       if (profile.towerStatus) {
         acc.tower = profile.towerStatus;
       }
@@ -280,6 +280,25 @@ function addLog(
   }
 }
 
+function safeUpdateProfile(acc: Account, newProfile: any) {
+  if (!newProfile) return;
+  if (
+    newProfile instanceof Error ||
+    newProfile.error ||
+    newProfile.isAxiosError ||
+    ("message" in newProfile && "config" in newProfile)
+  ) {
+    console.warn("拒絕將錯誤對象更新至角色 Profile:", newProfile);
+    return;
+  }
+  if (
+    typeof newProfile === "object" &&
+    ("nickname" in newProfile || "name" in newProfile || "hp" in newProfile)
+  ) {
+    Object.assign(acc.profile, newProfile);
+  }
+}
+
 async function startBattle(token: string) {
   const acc = accounts.find((a) => a.token === token);
   if (!acc || acc.automation.battle.running) return;
@@ -309,7 +328,7 @@ async function startBattle(token: string) {
         const statusCheckObj = new statusCheck(
           acc.profile,
           (newProfile: any) => {
-            if (newProfile) Object.assign(acc.profile, newProfile);
+            safeUpdateProfile(acc, newProfile);
           },
           acc.userObj,
           acc.automation.battle.setting
@@ -358,7 +377,7 @@ async function startBattle(token: string) {
           acc.profile,
           acc.userObj,
           (newProfile: any) => {
-            if (newProfile) Object.assign(acc.profile, newProfile);
+            safeUpdateProfile(acc, newProfile);
           },
           acc.automation.battle.setting,
           acc.automation.battle.equipmentCheckTag,
@@ -381,7 +400,7 @@ async function startBattle(token: string) {
             );
             const runRes = await acc.userObj.run();
             if (runRes) {
-              Object.assign(acc.profile, runRes.profile || runRes);
+              safeUpdateProfile(acc, runRes.profile || runRes);
               acc.automation.battle.timeline = runRes;
 
               let logMsg = `趕路成功！結果: ${
@@ -407,7 +426,7 @@ async function startBattle(token: string) {
             addLog(acc, "battle", "狀態檢查通過，發送狩獵請求...");
             const huntRes = await acc.userObj.battle();
             if (huntRes) {
-              Object.assign(acc.profile, huntRes.profile || huntRes);
+              safeUpdateProfile(acc, huntRes.profile || huntRes);
               acc.automation.battle.timeline = huntRes;
 
               let logMsg = `狩獵成功！結果: ${
@@ -486,7 +505,7 @@ async function startForge(token: string) {
         const checker = new forgeChecker(
           acc.profile,
           (newProfile: any) => {
-            if (newProfile) Object.assign(acc.profile, newProfile);
+            safeUpdateProfile(acc, newProfile);
           },
           acc.userObj
         );
@@ -575,7 +594,7 @@ async function startForge(token: string) {
               weapon_name: payload.weapon_name,
             });
             if (forgeResult) {
-              Object.assign(acc.profile, forgeResult);
+              safeUpdateProfile(acc, forgeResult);
               isCrafting = true;
               addLog(acc, "forge", `鍛造請求已送出，目前進入「鍛造」狀態。`);
             } else {

@@ -374,7 +374,7 @@ const miningStatusTag = computed(() => {
     case "採礦":
       return "warning";
     case "移動":
-      return "primary";
+      return "";
     case "休息":
       return "success";
     case "鍛造":

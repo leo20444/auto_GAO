@@ -24,6 +24,32 @@ class autoBattleChecker {
     this.medicineSetting = medicineSetting;
   }
 
+  safeMove = async (mapId) => {
+    const moveRes = await this.user.move(mapId);
+
+    const isConflict =
+      moveRes?.error &&
+      (moveRes.status === 409 ||
+        (moveRes.message && moveRes.message.includes("409")));
+
+    if (isConflict) {
+      ElMessage("移動衝突 (409)，嘗試確認落地...");
+      const arriveRes = await this.user.moveComplete();
+      if (arriveRes && !arriveRes.error && arriveRes.zoneName) {
+        this.setProfileInfo(arriveRes);
+        this.profile = arriveRes;
+        ElMessage("已自動確認落地！");
+        return arriveRes;
+      }
+    }
+
+    if (moveRes && !moveRes.error) {
+      this.setProfileInfo(moveRes);
+      this.profile = moveRes;
+    }
+    return moveRes;
+  };
+
   checkSetting = async () => {
     try {
       console.log("checkSetting");
@@ -31,9 +57,7 @@ class autoBattleChecker {
         if (this.profile.zoneName === "起始之鎮") {
           ElMessage("偵測到死亡回城，等待 3 秒後直接出發前往目標地圖...");
           await sleep(3000);
-          this.setProfileInfo(
-            await this.user.move(getMapIdByName(this.setting.map))
-          );
+          await this.safeMove(getMapIdByName(this.setting.map));
           return false;
         }
         // 死亡不用休息，繞過 HP/SP 檢查，但仍需確保在地圖上
@@ -142,9 +166,7 @@ class autoBattleChecker {
     // 3. 移動到目標地圖
     if (this.profile.zoneName !== this.setting.map) {
       ElMessage("地圖不對，前往目標地圖！");
-      this.setProfileInfo(
-        await this.user.move(getMapIdByName(this.setting.map))
-      );
+      await this.safeMove(getMapIdByName(this.setting.map));
       ElMessage("移動！");
       return false;
     }
@@ -158,7 +180,7 @@ class autoBattleChecker {
       ElMessage(
         `已達到目標層數 (${this.profile.huntStage}F >= ${this.setting.mapLevel}F)，正在回城休息...`
       );
-      this.setProfileInfo(await this.user.move(0)); // 移回起始之鎮 (0)
+      await this.safeMove(0); // 移回起始之鎮 (0)
       ElMessage("回城！");
       return false;
     }
@@ -180,13 +202,13 @@ class autoBattleChecker {
             return true;
           } else if (Number(this.profile.huntStage) > 16) {
             ElMessage("層數超過！");
-            this.setProfileInfo(await this.user.move(0));
+            await this.safeMove(0);
             ElMessage("回城！");
           }
           return true;
         } else {
           ElMessage("地圖不對！");
-          this.setProfileInfo(await this.user.move(getMapIdByName("大草原")));
+          await this.safeMove(getMapIdByName("大草原"));
           ElMessage("移動！");
 
           return false;
@@ -204,13 +226,13 @@ class autoBattleChecker {
             return true;
           } else if (Number(this.profile.huntStage) > 18) {
             ElMessage("層數超過！");
-            this.setProfileInfo(await this.user.move(0));
+            await this.safeMove(0);
             ElMessage("回城！");
           }
           return true;
         } else {
           ElMessage("地圖不對！");
-          this.setProfileInfo(await this.user.move(getMapIdByName("猛牛原")));
+          await this.safeMove(getMapIdByName("猛牛原"));
           ElMessage("移動！");
 
           return false;
