@@ -1,7 +1,0 @@
-{
-  "url": "https://gunart-backend.onrender.com/api/forge/jobs",
-  "method": "GET",
-  "data": {
-    "jobs": []
-  }
-}

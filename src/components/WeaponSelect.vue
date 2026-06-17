@@ -130,9 +130,24 @@
 
           <div
             v-if="weaponQueue.length > 0"
+            style="
+              margin-top: 10px;
+              display: flex;
+              justify-content: space-between;
+              align-items: center;
+            "
+          >
+            <el-tag v-if="isApplied" type="success" effect="dark" size="small">
+              ✓ 已套用至自動戰鬥（{{ weaponQueue.length }} 把武器）
+            </el-tag>
+            <span v-else style="font-size: 12px; color: #909399">尚未套用</span>
+            <el-button type="primary" @click="applyQueue"> 套用佇列 </el-button>
+          </div>
+          <div
+            v-if="!weaponQueue.length && isApplied"
             style="margin-top: 10px; text-align: right"
           >
-            <el-button type="primary" @click="applyQueue"> 套用佇列 </el-button>
+            <el-tag type="info" size="small">已清空佇列</el-tag>
           </div>
         </div>
       </div>
@@ -212,6 +227,9 @@ const filteredWeapons = computed(() => {
 // 武器佇列（有序）
 const weaponQueue = ref<any[]>([]);
 
+// 是否已套用至自動戰鬥
+const isApplied = ref(false);
+
 // 判斷武器是否已在佇列中
 const isInQueue = (id: any) => weaponQueue.value.some((w) => w.id === id);
 
@@ -249,12 +267,14 @@ const moveDown = (idx: number) => {
 // 清空佇列
 const clearQueue = () => {
   weaponQueue.value = [];
+  isApplied.value = false;
   emits("select-weapon", []);
 };
 
 // 套用佇列至自動戰鬥
 const applyQueue = () => {
   emits("select-weapon", [...weaponQueue.value]);
+  isApplied.value = true;
 };
 
 // 事件轉發

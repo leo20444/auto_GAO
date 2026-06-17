@@ -25,7 +25,7 @@ class autoBattleChecker {
   }
 
   safeMove = async (mapId) => {
-    const moveRes = await this.user.move(mapId);
+    let moveRes = await this.user.move(mapId);
 
     const isConflict =
       moveRes?.error &&
@@ -34,18 +34,37 @@ class autoBattleChecker {
 
     if (isConflict) {
       ElMessage("移動衝突 (409)，嘗試確認落地...");
+
       const arriveRes = await this.user.moveComplete();
-      if (arriveRes && !arriveRes.error && arriveRes.zoneName) {
+
+      if (arriveRes && !arriveRes.error) {
         this.setProfileInfo(arriveRes);
         this.profile = arriveRes;
-        ElMessage("已自動確認落地！");
-        return arriveRes;
-      }
-    }
 
-    if (moveRes && !moveRes.error) {
-      this.setProfileInfo(moveRes);
-      this.profile = moveRes;
+        // arrive 後確認是否已在目標地圖，若是則不再發 move（避免二次 409）
+        const targetMap = map.find((item) => item.id === mapId);
+        const alreadyThere =
+          mapId === 0
+            ? arriveRes.zoneName === "起始之鎮"
+            : targetMap && arriveRes.zoneName === targetMap.name;
+
+        if (alreadyThere) {
+          moveRes = arriveRes;
+        } else {
+          // 給伺服器短暫緩衝後重新發 move
+          await sleep(500);
+          moveRes = await this.user.move(mapId);
+          if (moveRes && !moveRes.error) {
+            this.setProfileInfo(moveRes);
+            this.profile = moveRes;
+          }
+        }
+      }
+    } else {
+      if (moveRes && !moveRes.error) {
+        this.setProfileInfo(moveRes);
+        this.profile = moveRes;
+      }
     }
     return moveRes;
   };

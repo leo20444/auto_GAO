@@ -136,7 +136,9 @@ const handleRecycle = async () => {
       console.error(`回收 ID: ${recycleAry[i].id} 失敗`, e);
     }
 
-    recycleProgress.value = Math.round(((i + 1) / total) * 100);
+    recycleProgress.value = total
+      ? Math.min(100, Math.max(0, Math.round(((i + 1) / total) * 100)))
+      : 0;
     await sleep(1500); // 使用較安全的頻率
   }
 

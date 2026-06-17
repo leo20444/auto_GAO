@@ -85,10 +85,15 @@ class statusCheck {
       case "移動":
         if (moment().isAfter(moment(this.profile.actionStart))) {
           let profile = await this.user.moveComplete();
-          this.profile = profile;
-          await this.setProfileInfo(profile);
-          ElMessage("移動完成，確認落地！");
-          return true;
+          if (profile && !profile.error) {
+            this.profile = profile;
+            await this.setProfileInfo(profile);
+            ElMessage("移動完成，確認落地！");
+            return true;
+          } else {
+            ElMessage("確認落地失敗，將於下次回合重試...");
+            return false;
+          }
         }
         {
           let remaining = moment.duration(

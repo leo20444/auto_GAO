@@ -36,9 +36,15 @@
                     <el-progress
                       :percentage="
                         selectedAccount.profile.fullHp
-                          ? (selectedAccount.profile.hp /
-                              selectedAccount.profile.fullHp) *
-                            100
+                          ? Math.min(
+                              100,
+                              Math.max(
+                                0,
+                                (selectedAccount.profile.hp /
+                                  selectedAccount.profile.fullHp) *
+                                  100
+                              )
+                            )
                           : 0
                       "
                       status="exception"
@@ -57,9 +63,15 @@
                     <el-progress
                       :percentage="
                         selectedAccount.profile.fullSp
-                          ? (selectedAccount.profile.sp /
-                              selectedAccount.profile.fullSp) *
-                            100
+                          ? Math.min(
+                              100,
+                              Math.max(
+                                0,
+                                (selectedAccount.profile.sp /
+                                  selectedAccount.profile.fullSp) *
+                                  100
+                              )
+                            )
                           : 0
                       "
                       :stroke-width="14"
@@ -139,7 +151,13 @@
                           <el-progress
                             :percentage="
                               member.max_hp
-                                ? (member.hp / member.max_hp) * 100
+                                ? Math.min(
+                                    100,
+                                    Math.max(
+                                      0,
+                                      (member.hp / member.max_hp) * 100
+                                    )
+                                  )
                                 : 0
                             "
                             status="exception"
@@ -150,7 +168,13 @@
                           <el-progress
                             :percentage="
                               member.max_mp
-                                ? (member.mp / member.max_mp) * 100
+                                ? Math.min(
+                                    100,
+                                    Math.max(
+                                      0,
+                                      (member.mp / member.max_mp) * 100
+                                    )
+                                  )
                                 : 0
                             "
                             :stroke-width="5"
@@ -493,6 +517,13 @@ const formatTime = (timeStr: string) => {
   display: flex;
   flex-direction: column;
   height: 100%;
+}
+
+.party-section > div {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
 }
 
 .party-id {

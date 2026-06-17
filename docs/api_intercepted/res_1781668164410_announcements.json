@@ -1,0 +1,33 @@
+{
+  "url": "https://gunart-backend.onrender.com/api/announcements",
+  "method": "GET",
+  "data": {
+    "announcements": [
+      {
+        "id": 13,
+        "message": "恭喜玩家「愛意隨風起」中大獎啦！獎金41467G！",
+        "color": "#FFD700"
+      },
+      {
+        "id": 3,
+        "message": "歡迎來到 GUN ART ONLINE，祝各位冒險順利。",
+        "color": null
+      },
+      {
+        "id": 12,
+        "message": "《艾恩葛朗特 迴盪新聲》體驗版已上線，大家可以去體驗看看",
+        "color": "#00cdf0"
+      },
+      {
+        "id": 7,
+        "message": "有bug找帶你們進來的那個人，讓他向上回報，晚上十點後不修",
+        "color": "#be38f3"
+      },
+      {
+        "id": 6,
+        "message": "創號1天未升到2級將自動銷號",
+        "color": "#f00000"
+      }
+    ]
+  }
+}

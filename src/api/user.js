@@ -29,31 +29,59 @@ function user(inputToken) {
   const normalizeProfile = (character, towerStatus, activeJob, mineStatus) => {
     if (!character) return null;
 
-    let actionStatus = "空閒";
+    // --- 並行狀態陣列（可同時存在多個）---
+    // 情境一：戰鬥 + 鍛造（不能採礦）
+    // 情境二：採礦 + 鍛造（不能戰鬥）
+    // → 後端本身就保證互斥，前端直接反映 API 資料即可
+    const activeStatuses = [];
     let actionStart = null;
     let forgingCompletionTime = null;
 
+    // 塔狀態：
+    //   restStartedAt → 休息（塔內休息）
+    //   moveEndsAt    → 移動（前往某層）
+    //   floor > 0     → 戰鬥中（在塔裡打怪）
+    //   floor == 0    → 不在塔裡 / 城鎮狀態，不算戰鬥
     if (towerStatus) {
       if (towerStatus.restStartedAt) {
-        actionStatus = "休息";
+        activeStatuses.push("休息");
         actionStart = towerStatus.restStartedAt;
       } else if (towerStatus.moveEndsAt) {
-        actionStatus = "移動";
+        activeStatuses.push("移動");
         actionStart = towerStatus.moveEndsAt;
+      } else if (towerStatus.floor > 0) {
+        // 在塔裡、非休息/移動 → 戰鬥中
+        activeStatuses.push("戰鬥");
       }
+      // floor === 0 或 null：角色在城鎮，不推入任何塔狀態
     }
 
-    if (actionStatus === "空閒") {
-      if (activeJob) {
-        actionStatus = "鍛造";
+    // 鍛造：可與戰鬥並行（情境一），也可與採礦並行（情境二）
+    if (activeJob) {
+      activeStatuses.push("鍛造");
+      if (!actionStart)
         actionStart = activeJob.createdAt || new Date().toISOString();
-        forgingCompletionTime =
-          activeJob.completionTime || activeJob.completeAt;
-      } else if (mineStatus && mineStatus.active) {
-        actionStatus = "採礦";
-        actionStart = mineStatus.startedAt || new Date().toISOString();
-      }
+      forgingCompletionTime =
+        activeJob.ready_at || activeJob.completionTime || activeJob.completeAt;
     }
+
+    // 採礦：可與鍛造並行（情境二），後端保證不會與戰鬥同時發生（情境一互斥）
+    if (mineStatus && mineStatus.active) {
+      activeStatuses.push("採礦");
+      if (!actionStart)
+        actionStart = mineStatus.startedAt || new Date().toISOString();
+    }
+
+    if (activeStatuses.length === 0) {
+      activeStatuses.push("空閒");
+    }
+
+    // actionStatus 保留向後相容（取優先序第一個）
+    const legacyPriority = ["休息", "移動", "採礦", "鍛造", "戰鬥", "空閒"];
+    const actionStatus =
+      legacyPriority.find((s) => activeStatuses.includes(s)) ||
+      activeStatuses[0] ||
+      "空閒";
 
     const currentZoneName =
       towerStatus?.zones?.[towerStatus?.zone]?.name || "未知區域";
@@ -66,7 +94,8 @@ function user(inputToken) {
       fullSp: character.maxMp,
       lv: character.level,
       nextExp: 1000,
-      actionStatus: actionStatus,
+      activeStatuses: activeStatuses, // ← 新欄位：並行狀態陣列
+      actionStatus: actionStatus, // ← 保留相容
       actionStart: actionStart || new Date().toISOString(),
       forgingCompletionTime,
       zoneName: currentZoneName,
@@ -489,10 +518,25 @@ function user(inputToken) {
     }
   };
 
-  this.forgeComplete = async function () {
+  this.forgeComplete = async function (id) {
     try {
+      let jobId = id;
+      if (!jobId) {
+        const jobsRes = await axios.get(`${baseurl}/forge/jobs`, {
+          headers: getHeaders(),
+        });
+        const activeJob = jobsRes.data?.jobs?.[0];
+        if (activeJob) {
+          jobId = activeJob.id;
+        }
+      }
+
+      if (!jobId) {
+        throw new Error("找不到可領取的鍛造任務");
+      }
+
       await axios.post(
-        `${baseurl}/forge/complete`,
+        `${baseurl}/forge/collect/${jobId}`,
         {},
         { headers: getHeaders() }
       );

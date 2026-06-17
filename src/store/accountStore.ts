@@ -32,11 +32,19 @@ export interface Account {
         autoRest: boolean;
         autoRestPercent: number;
         autoRestSeconds: number;
+        partyMode?: {
+          enabled: boolean;
+          isLeader: boolean;
+          maxFloor: number;
+          minDurability: number;
+          allowEmptyHanded: boolean;
+        };
       };
       equipmentCheckTag: boolean;
       weaponCheckTag: boolean;
       armorCheckTag: boolean;
       medicineCheckTag: boolean;
+      selectedWeaponQueue: any[];
       medicineSetting: {
         medicineHpId: string;
         medicineSpId: string;
@@ -73,6 +81,10 @@ export interface Account {
   };
   party: any;
   tower: any;
+  items: {
+    equipments: any[];
+    items: any[];
+  };
 }
 
 const accounts = reactive<Account[]>([]);
@@ -125,6 +137,12 @@ async function refreshAccountState(acc: Account, forceAll = false) {
         acc.tower = profile.towerStatus;
       }
     }
+    // 同步抓取背包與裝備清單
+    const itemsRes = await acc.userObj.item();
+    if (itemsRes) {
+      acc.items.equipments = itemsRes.equipments || [];
+      acc.items.items = itemsRes.items || [];
+    }
     if (forceAll || !acc.party) {
       const pStatus = await acc.userObj.getPartyStatus();
       if (pStatus) {
@@ -164,6 +182,10 @@ function addAccount(token: string) {
     },
     party: null,
     tower: null,
+    items: {
+      equipments: [],
+      items: [],
+    },
     isActive: true,
     automation: {
       battle: {
@@ -184,11 +206,20 @@ function addAccount(token: string) {
           autoRest: savedSetting.setting?.autoRest ?? false,
           autoRestPercent: savedSetting.setting?.autoRestPercent ?? 90,
           autoRestSeconds: savedSetting.setting?.autoRestSeconds ?? 0,
+          partyMode: {
+            enabled: savedSetting.setting?.partyMode?.enabled ?? false,
+            isLeader: savedSetting.setting?.partyMode?.isLeader ?? false,
+            maxFloor: savedSetting.setting?.partyMode?.maxFloor ?? 0,
+            minDurability: savedSetting.setting?.partyMode?.minDurability ?? 10,
+            allowEmptyHanded:
+              savedSetting.setting?.partyMode?.allowEmptyHanded ?? false,
+          },
         },
         equipmentCheckTag: savedSetting.setting?.equipmentCheckTag ?? true,
         weaponCheckTag: savedSetting.setting?.weaponCheckTag ?? true,
         armorCheckTag: savedSetting.setting?.armorCheckTag ?? false,
         medicineCheckTag: savedSetting.setting?.medicineCheckTag ?? true,
+        selectedWeaponQueue: [],
         medicineSetting: {
           medicineHpId: savedSetting.medicineSetting?.medicineHpId ?? "",
           medicineSpId: savedSetting.medicineSetting?.medicineSpId ?? "",
@@ -351,13 +382,22 @@ async function startBattle(token: string) {
         }
 
         const itemsRes = await acc.userObj.item();
-        const weaponList = itemsRes?.equipments || [];
-        const selectWeaponList = acc.automation.battle.setting.weaponDuration
-          ? weaponList.filter(
-              (w: any) =>
-                w.durability >= acc.automation.battle.setting.weaponDuration
-            )
-          : [];
+        if (itemsRes) {
+          acc.items.equipments = itemsRes.equipments || [];
+          acc.items.items = itemsRes.items || [];
+        }
+        const weaponList = acc.items.equipments;
+        // 優先使用使用者在 UI 手動選好的佇列；若為空則回退到依耐久篩選
+        const userQueue = acc.automation.battle.selectedWeaponQueue || [];
+        const selectWeaponList =
+          userQueue.length > 0
+            ? userQueue
+            : acc.automation.battle.setting.weaponDuration
+            ? weaponList.filter(
+                (w: any) =>
+                  w.durability >= acc.automation.battle.setting.weaponDuration
+              )
+            : [];
 
         // 2. 初始化 weaponChecker
         const myWeaponChecker = new weaponChecker(
@@ -389,64 +429,205 @@ async function startBattle(token: string) {
         // 4. 執行檢查 (HP, SP, 地圖, 補品, 裝備)
         const checkResult = await checker.checkSetting();
         if (checkResult) {
-          const runLevel = acc.automation.battle.setting.runLevel || 0;
-          const currentStage = acc.profile.huntStage || 0;
-
-          if (currentStage < runLevel) {
+          const pMode = acc.automation.battle.setting.partyMode;
+          if (pMode && pMode.enabled && !pMode.isLeader) {
             addLog(
               acc,
               "battle",
-              `當前層數 (${currentStage}F) 低於趕路層數 (${runLevel}F)，發送趕路請求...`
+              "組隊模式中：狀態已就緒，等待隊長發起戰鬥..."
             );
-            const runRes = await acc.userObj.run();
-            if (runRes) {
-              safeUpdateProfile(acc, runRes.profile || runRes);
-              acc.automation.battle.timeline = runRes;
-
-              let logMsg = `趕路成功！結果: ${
-                runRes.winner || "未知"
-              }, 經驗值: ${runRes.exp || 0}, 獲得金幣: ${runRes.gold || 0}`;
-              if (runRes.advance) {
-                if (runRes.advance.died) {
-                  logMsg += ` [玩家死亡]`;
-                }
-                if (
-                  runRes.advance.itemDrops &&
-                  runRes.advance.itemDrops.length > 0
-                ) {
-                  const drops = runRes.advance.itemDrops
-                    .map((d: any) => `${d.name} x${d.quantity}`)
-                    .join(", ");
-                  logMsg += `，掉落: ${drops}`;
-                }
-              }
-              addLog(acc, "battle", logMsg);
-            }
           } else {
-            addLog(acc, "battle", "狀態檢查通過，發送狩獵請求...");
-            const huntRes = await acc.userObj.battle();
-            if (huntRes) {
-              safeUpdateProfile(acc, huntRes.profile || huntRes);
-              acc.automation.battle.timeline = huntRes;
+            let proceedWithBattle = true;
 
-              let logMsg = `狩獵成功！結果: ${
-                huntRes.winner || "未知"
-              }, 經驗值: ${huntRes.exp || 0}, 獲得金幣: ${huntRes.gold || 0}`;
-              if (huntRes.advance) {
-                if (huntRes.advance.died) {
-                  logMsg += ` [玩家死亡]`;
+            if (pMode && pMode.enabled && pMode.isLeader) {
+              // 1. 層數上限判定
+              const maxFloor = pMode.maxFloor || 0;
+              if (maxFloor > 0 && acc.profile.huntStage >= maxFloor) {
+                addLog(
+                  acc,
+                  "battle",
+                  `[組隊模式] 已達隊伍層數上限 (${acc.profile.huntStage}F >= ${maxFloor}F)，帶隊回城並停止自動戰鬥！`
+                );
+                try {
+                  await acc.userObj.move(0);
+                } catch (e) {
+                  console.error("帶隊回城移動失敗:", e);
                 }
-                if (
-                  huntRes.advance.itemDrops &&
-                  huntRes.advance.itemDrops.length > 0
-                ) {
-                  const drops = huntRes.advance.itemDrops
-                    .map((d: any) => `${d.name} x${d.quantity}`)
-                    .join(", ");
-                  logMsg += `，掉落: ${drops}`;
+                acc.automation.battle.running = false;
+                break;
+              }
+
+              // 2. 獲取並巡查隊伍狀態
+              const partyStatus = await acc.userObj.getPartyStatus();
+              if (
+                partyStatus &&
+                partyStatus.party &&
+                partyStatus.party.members
+              ) {
+                let allMembersReady = true;
+                const members = partyStatus.party.members;
+
+                for (const member of members) {
+                  // 排除隊長自己
+                  if (member.user_id === acc.profile.id) continue;
+
+                  // 尋找我方託管帳號
+                  const memberAcc = accounts.find(
+                    (a) => a.profile.id === member.user_id
+                  );
+                  if (memberAcc) {
+                    // A. 我方託管組員
+                    const memberHpLimit =
+                      memberAcc.automation.battle.setting.hp || 100;
+                    const memberSpLimit =
+                      memberAcc.automation.battle.setting.sp || 150;
+
+                    if (
+                      member.hp <= memberHpLimit ||
+                      member.mp <= memberSpLimit
+                    ) {
+                      addLog(
+                        acc,
+                        "battle",
+                        `[組隊等待] 組員 ${member.character_name} HP/SP 不足 (HP: ${member.hp}/${member.max_hp}, SP: ${member.mp}/${member.max_mp})，等待其恢復...`
+                      );
+                      allMembersReady = false;
+                    }
+
+                    // 最低耐久度與空手檢查
+                    const minDur = pMode.minDurability || 10;
+                    const memberEquips = memberAcc.items.equipments || [];
+                    const equippedWeapons = memberEquips.filter(
+                      (w: any) => w.status === "已裝備"
+                    );
+                    const weaponTypes = [
+                      "短刀",
+                      "單手劍",
+                      "細劍",
+                      "單手錘",
+                      "盾牌",
+                      "雙手斧",
+                      "雙手劍",
+                      "太刀",
+                      "長槍",
+                    ];
+                    const equippedWeapon = equippedWeapons.find((w: any) =>
+                      weaponTypes.includes(w.typeName)
+                    );
+
+                    if (equippedWeapon) {
+                      if (equippedWeapon.durability < minDur) {
+                        addLog(
+                          acc,
+                          "battle",
+                          `[組隊等待] 組員 ${member.character_name} 武器 ${equippedWeapon.name} 耐久低於統一門檻 (${equippedWeapon.durability} < ${minDur})，等待更換...`
+                        );
+                        allMembersReady = false;
+                      }
+                    } else {
+                      if (!pMode.allowEmptyHanded) {
+                        addLog(
+                          acc,
+                          "battle",
+                          `[組隊等待] 組員 ${member.character_name} 目前空手（不允許空手），等待其裝備武器...`
+                        );
+                        allMembersReady = false;
+                      }
+                    }
+                  } else {
+                    // B. 隊外玩家 (非我方託管)
+                    const hpPercent = member.max_hp
+                      ? member.hp / member.max_hp
+                      : 1;
+                    const mpPercent = member.max_mp
+                      ? member.mp / member.max_mp
+                      : 1;
+                    if (hpPercent < 0.5 || mpPercent < 0.3) {
+                      addLog(
+                        acc,
+                        "battle",
+                        `[組隊等待] 隊外組員 ${
+                          member.character_name
+                        } 狀態不足 (HP: ${Math.round(
+                          hpPercent * 100
+                        )}%, SP: ${Math.round(mpPercent * 100)}%)，等待恢復...`
+                      );
+                      allMembersReady = false;
+                    }
+                  }
+                }
+
+                if (!allMembersReady) {
+                  proceedWithBattle = false;
+                  await sleep(5000);
+                  continue; // 跳出當前 logic 迴圈，等 5 秒後重新檢測
                 }
               }
-              addLog(acc, "battle", logMsg);
+            }
+
+            if (proceedWithBattle) {
+              const runLevel = acc.automation.battle.setting.runLevel || 0;
+              const currentStage = acc.profile.huntStage || 0;
+
+              if (currentStage < runLevel) {
+                addLog(
+                  acc,
+                  "battle",
+                  `當前層數 (${currentStage}F) 低於趕路層數 (${runLevel}F)，發送趕路請求...`
+                );
+                const runRes = await acc.userObj.run();
+                if (runRes) {
+                  safeUpdateProfile(acc, runRes.profile || runRes);
+                  acc.automation.battle.timeline = runRes;
+
+                  let logMsg = `趕路成功！結果: ${
+                    runRes.winner || "未知"
+                  }, 經驗值: ${runRes.exp || 0}, 獲得金幣: ${runRes.gold || 0}`;
+                  if (runRes.advance) {
+                    if (runRes.advance.died) {
+                      logMsg += ` [玩家死亡]`;
+                    }
+                    if (
+                      runRes.advance.itemDrops &&
+                      runRes.advance.itemDrops.length > 0
+                    ) {
+                      const drops = runRes.advance.itemDrops
+                        .map((d: any) => `${d.name} x${d.quantity}`)
+                        .join(", ");
+                      logMsg += `，掉落: ${drops}`;
+                    }
+                  }
+                  addLog(acc, "battle", logMsg);
+                }
+              } else {
+                addLog(acc, "battle", "狀態檢查通過，發送狩獵請求...");
+                const huntRes = await acc.userObj.battle();
+                if (huntRes) {
+                  safeUpdateProfile(acc, huntRes.profile || huntRes);
+                  acc.automation.battle.timeline = huntRes;
+
+                  let logMsg = `狩獵成功！結果: ${
+                    huntRes.winner || "未知"
+                  }, 經驗值: ${huntRes.exp || 0}, 獲得金幣: ${
+                    huntRes.gold || 0
+                  }`;
+                  if (huntRes.advance) {
+                    if (huntRes.advance.died) {
+                      logMsg += ` [玩家死亡]`;
+                    }
+                    if (
+                      huntRes.advance.itemDrops &&
+                      huntRes.advance.itemDrops.length > 0
+                    ) {
+                      const drops = huntRes.advance.itemDrops
+                        .map((d: any) => `${d.name} x${d.quantity}`)
+                        .join(", ");
+                      logMsg += `，掉落: ${drops}`;
+                    }
+                  }
+                  addLog(acc, "battle", logMsg);
+                }
+              }
             }
           }
         } else {
@@ -554,7 +735,11 @@ async function startForge(token: string) {
           } else {
             // 檢查材料是否足夠
             const itemsRes = await acc.userObj.item();
-            const backpackItems = itemsRes?.items || [];
+            if (itemsRes) {
+              acc.items.equipments = itemsRes.equipments || [];
+              acc.items.items = itemsRes.items || [];
+            }
+            const backpackItems = acc.items.items;
             let hasEnough = true;
 
             for (const req of payload.materials) {

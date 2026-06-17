@@ -81,13 +81,33 @@ const handleDeleteAccount = (index: number, event: Event) => {
               </div>
               <div class="account-stats">
                 <el-progress
-                  :percentage="(acc.profile.hp / acc.profile.fullHp) * 100"
+                  :percentage="
+                    acc.profile.fullHp
+                      ? Math.min(
+                          100,
+                          Math.max(
+                            0,
+                            (acc.profile.hp / acc.profile.fullHp) * 100
+                          )
+                        )
+                      : 0
+                  "
                   :show-text="false"
                   status="exception"
                   class="mini-bar"
                 />
                 <el-progress
-                  :percentage="(acc.profile.sp / acc.profile.fullSp) * 100"
+                  :percentage="
+                    acc.profile.fullSp
+                      ? Math.min(
+                          100,
+                          Math.max(
+                            0,
+                            (acc.profile.sp / acc.profile.fullSp) * 100
+                          )
+                        )
+                      : 0
+                  "
                   :show-text="false"
                   class="mini-bar"
                 />

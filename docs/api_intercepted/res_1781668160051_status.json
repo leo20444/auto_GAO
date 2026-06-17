@@ -1,0 +1,43 @@
+{
+  "url": "https://gunart-backend.onrender.com/api/tower/status",
+  "method": "GET",
+  "data": {
+    "zone": "great_plains",
+    "floor": 1,
+    "destinationZone": "starting_town",
+    "moveEndsAt": null,
+    "canArrive": true,
+    "restStartedAt": null,
+    "zones": {
+      "starting_town": {
+        "name": "起始之鎮",
+        "canFight": false
+      },
+      "great_plains": {
+        "name": "大草原",
+        "canFight": true
+      },
+      "bull_garden": {
+        "name": "猛牛園",
+        "canFight": true
+      },
+      "childrens_park": {
+        "name": "兒童樂園",
+        "canFight": true
+      },
+      "mushroom_garden": {
+        "name": "蘑菇園",
+        "canFight": true
+      },
+      "yuanmingyuan": {
+        "name": "圓明園",
+        "canFight": true
+      }
+    },
+    "bossFloor": 30,
+    "bossCooldownEndsAt": null,
+    "inSecretRealm": false,
+    "hasBranch": false,
+    "hasExit": false
+  }
+}

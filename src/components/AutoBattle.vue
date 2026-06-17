@@ -51,12 +51,21 @@
               >{{ count }} 次</el-descriptions-item
             >
             <el-descriptions-item label="角色動作">
-              <el-tag :type="miningStatusTag" size="small">
-                {{ props.profile?.actionStatus || "空閒" }}
-              </el-tag>
+              <span style="display: flex; flex-wrap: wrap; gap: 4px">
+                <el-tag
+                  v-for="status in props.profile?.activeStatuses || [
+                    props.profile?.actionStatus || '空閒',
+                  ]"
+                  :key="status"
+                  :type="statusTagType(status)"
+                  size="small"
+                >
+                  {{ status }}
+                </el-tag>
+              </span>
             </el-descriptions-item>
             <el-descriptions-item
-              v-if="props.profile?.actionStatus === '採礦'"
+              v-if="(props.profile?.activeStatuses || []).includes('採礦')"
               label="採礦詳情"
             >
               <span style="font-size: 12px; color: #e6a23c">
@@ -64,7 +73,7 @@
               </span>
             </el-descriptions-item>
             <el-descriptions-item
-              v-if="props.profile?.actionStatus === '移動'"
+              v-if="(props.profile?.activeStatuses || []).includes('移動')"
               label="移動詳情"
             >
               <span style="font-size: 12px; color: #409eff">
@@ -72,7 +81,7 @@
               </span>
             </el-descriptions-item>
             <el-descriptions-item
-              v-if="props.profile?.actionStatus === '休息'"
+              v-if="(props.profile?.activeStatuses || []).includes('休息')"
               label="休息詳情"
             >
               <span style="font-size: 12px; color: #67c23a">
@@ -194,6 +203,57 @@
     <el-card shadow="never" class="inner-card" style="margin-top: 20px">
       <template #header>
         <div class="card-header-flex">
+          <span>組隊模式設定</span>
+          <el-switch
+            v-model="setting.partyMode.enabled"
+            active-text="啟用組隊模式"
+          />
+        </div>
+      </template>
+      <el-row :gutter="20" v-if="setting.partyMode.enabled">
+        <el-col :span="8">
+          <div class="input-label">我的身分</div>
+          <el-switch
+            v-model="setting.partyMode.isLeader"
+            active-text="我是隊長"
+            inactive-text="我是隊員"
+            inline-prompt
+          />
+        </el-col>
+        <el-col :span="8" v-if="setting.partyMode.isLeader">
+          <div class="input-label">隊伍層數上限 (0為無上限)</div>
+          <el-input-number
+            v-model="setting.partyMode.maxFloor"
+            :min="0"
+            style="width: 100%"
+            placeholder="0為無上限"
+          />
+        </el-col>
+        <el-col :span="8" v-if="setting.partyMode.isLeader">
+          <div class="input-label">組員最低耐久</div>
+          <el-input-number
+            v-model="setting.partyMode.minDurability"
+            :min="0"
+            style="width: 100%"
+          />
+        </el-col>
+      </el-row>
+      <el-row
+        :gutter="20"
+        v-if="setting.partyMode.enabled && setting.partyMode.isLeader"
+        style="margin-top: 12px"
+      >
+        <el-col :span="24">
+          <el-checkbox v-model="setting.partyMode.allowEmptyHanded">
+            允許組員空手 (當無可用武器時)
+          </el-checkbox>
+        </el-col>
+      </el-row>
+    </el-card>
+
+    <el-card shadow="never" class="inner-card" style="margin-top: 20px">
+      <template #header>
+        <div class="card-header-flex">
           <span>補品設定</span>
           <el-switch v-model="medicineCheckTag" active-text="啟動自動吃藥" />
         </div>
@@ -298,7 +358,7 @@
 
     <div style="margin-top: 20px">
       <WeaponSelect
-        :weapon-list="equippedWeapon"
+        :weapon-list="weaponList"
         :select-weapon-list="selectWeaponList"
         :weapon-check-tag="weaponCheckTag"
         :armor-check-tag="armorCheckTag"
@@ -349,7 +409,16 @@ const battleTimeline = computed(
 );
 
 const count = ref(0);
-const weaponList = ref([]);
+
+// 直接從 store 讀取裝備清單，確保「立即重新整理」後自動更新
+const weaponList = computed(() => {
+  const list = account.value?.items?.equipments || [];
+  return list;
+});
+const items = computed(() => ({
+  items: account.value?.items?.items || [],
+  equipments: account.value?.items?.equipments || [],
+}));
 const selectWeaponList = ref([]);
 
 // 本地可變響應式變數，與 UI 輸入進行雙向綁定
@@ -366,11 +435,18 @@ const setting = ref({
   autoRest: false,
   autoRestPercent: 90,
   autoRestSeconds: 0,
+  partyMode: {
+    enabled: false,
+    isLeader: false,
+    maxFloor: 0,
+    minDurability: 10,
+    allowEmptyHanded: false,
+  },
 });
 
-// 採礦狀態對應 tag 顏色
-const miningStatusTag = computed(() => {
-  switch (props.profile?.actionStatus) {
+// 各狀態對應 tag 顏色
+const statusTagType = (status: string) => {
+  switch (status) {
     case "採礦":
       return "warning";
     case "移動":
@@ -379,10 +455,12 @@ const miningStatusTag = computed(() => {
       return "success";
     case "鍛造":
       return "info";
+    case "戰鬥":
+      return "danger";
     default:
       return "";
   }
-});
+};
 
 const medicineSetting = ref({
   medicineHpId: "",
@@ -395,8 +473,6 @@ const medicineCheckTag = ref(true);
 const weaponCheckTag = ref(true);
 const armorCheckTag = ref(false);
 const equipmentCheckTag = ref(true);
-
-const items = ref({ items: [], equipments: [] });
 
 // 防止 store→local 和 local→store 互相觸發的防護 flag
 const isUpdatingFromStore = ref(false);
@@ -417,8 +493,14 @@ watch(
       setting.value.spRecoveryMode = newVal.setting.spRecoveryMode || "rest";
       setting.value.allowEmptyHanded = newVal.setting.allowEmptyHanded ?? false;
       setting.value.autoRest = newVal.setting.autoRest ?? false;
-      setting.value.autoRestPercent = newVal.setting.autoRestPercent ?? 90;
       setting.value.autoRestSeconds = newVal.setting.autoRestSeconds ?? 0;
+      setting.value.partyMode = {
+        enabled: newVal.setting.partyMode?.enabled ?? false,
+        isLeader: newVal.setting.partyMode?.isLeader ?? false,
+        maxFloor: newVal.setting.partyMode?.maxFloor ?? 0,
+        minDurability: newVal.setting.partyMode?.minDurability ?? 10,
+        allowEmptyHanded: newVal.setting.partyMode?.allowEmptyHanded ?? false,
+      };
 
       medicineSetting.value.medicineHpId = newVal.medicineSetting.medicineHpId;
       medicineSetting.value.medicineSpId = newVal.medicineSetting.medicineSpId;
@@ -467,6 +549,13 @@ watch(
       battleAuto.setting.autoRest = setting.value.autoRest;
       battleAuto.setting.autoRestPercent = setting.value.autoRestPercent;
       battleAuto.setting.autoRestSeconds = setting.value.autoRestSeconds;
+      battleAuto.setting.partyMode = {
+        enabled: setting.value.partyMode.enabled,
+        isLeader: setting.value.partyMode.isLeader,
+        maxFloor: setting.value.partyMode.maxFloor,
+        minDurability: setting.value.partyMode.minDurability,
+        allowEmptyHanded: setting.value.partyMode.allowEmptyHanded,
+      };
 
       battleAuto.medicineSetting.medicineHpId =
         medicineSetting.value.medicineHpId;
@@ -496,11 +585,12 @@ const medicine = computed(() => {
 });
 
 const setWeapon = async () => {
+  // 主動呼叫一次 API 取得最新裝備，並更新至 store
   try {
     const res = await props.userObj.item();
-    if (res) {
-      items.value = res;
-      weaponList.value = res.equipments;
+    if (res && account.value) {
+      account.value.items.equipments = res.equipments || [];
+      account.value.items.items = res.items || [];
     }
   } catch (e) {
     console.error("載入裝備與道具清單失敗", e);
@@ -509,8 +599,8 @@ const setWeapon = async () => {
 
 const equippedWeapon = computed(() => {
   return weaponList.value
-    .filter((weapon) => weapon.status == "已裝備")
-    .map((weapon) => {
+    .filter((weapon: any) => weapon.status == "已裝備")
+    .map((weapon: any) => {
       const { id, name, durability, fullDurability } = weapon;
       return { id, name, durability, fullDurability };
     });
@@ -518,6 +608,10 @@ const equippedWeapon = computed(() => {
 
 const selectWeapons = (weapons) => {
   selectWeaponList.value = weapons;
+  // 同步存入 store，讓自動戰鬥後台循環能讀取使用者選好的武器佇列
+  if (account.value) {
+    account.value.automation.battle.selectedWeaponQueue = [...weapons];
+  }
 };
 
 const equipmentCheck = () => {

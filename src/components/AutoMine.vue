@@ -229,8 +229,9 @@ const countdownText = computed(() => {
 });
 
 const progressPercent = computed(() => {
-  if (!activeMining.value) return 0;
-  return Math.min(100, Math.round((elapsed.value / limitSeconds.value) * 100));
+  if (!activeMining.value || !limitSeconds.value) return 0;
+  const pct = Math.round((elapsed.value / limitSeconds.value) * 100);
+  return Math.min(100, Math.max(0, isNaN(pct) ? 0 : pct));
 });
 
 let statusTimer: ReturnType<typeof setInterval> | null = null;

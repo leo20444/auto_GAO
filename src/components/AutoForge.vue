@@ -27,6 +27,20 @@
         </el-col>
       </el-row>
 
+      <el-row :gutter="20" align="middle" style="margin-top: 15px">
+        <el-col :span="24">
+          <el-button
+            type="warning"
+            size="large"
+            @click="handleManualClaim"
+            :disabled="!isForging"
+            style="width: 100%"
+          >
+            手動領取裝備
+          </el-button>
+        </el-col>
+      </el-row>
+
       <el-divider border-style="dashed" />
 
       <!-- Form Settings -->
@@ -209,7 +223,7 @@ const props = defineProps({
   profile: Object,
 });
 
-defineEmits(["set-profile"]);
+const emit = defineEmits(["set-profile"]);
 
 const store = useAccountStore();
 const account = computed(() => {
@@ -232,6 +246,9 @@ const showContent = ref(false);
 const recipes = ref<any[]>([]);
 const backpackMaterials = ref<any[]>([]);
 const loadingRecipes = ref(false);
+
+// 防止 store→local 和 local→store 互相觸發的防護 flag
+const isUpdatingFromStore = ref(false);
 
 // 本地可變響應式變數，與 UI 輸入進行雙向綁定
 const weapon_name = ref("");
@@ -273,6 +290,7 @@ watch(
   currentForgeAutomation,
   (newVal) => {
     if (newVal) {
+      isUpdatingFromStore.value = true;
       weapon_name.value = newVal.weaponPayload.weapon_name || "";
       result_item_id.value = newVal.weaponPayload.result_item_id || 0;
       loopCraft.value = newVal.setting?.loopCraft ?? false;
@@ -291,6 +309,10 @@ watch(
         }
       });
       selectedMaterials.value = newMats;
+
+      setTimeout(() => {
+        isUpdatingFromStore.value = false;
+      }, 0);
     }
   },
   { immediate: true, deep: true }
@@ -309,10 +331,10 @@ watch(
   { deep: true }
 );
 
-// 當 UI 修改設定時，自動同步回 Store
 watch(
   [weapon_name, result_item_id, selectedMaterials, loopCraft, maxCraftCount],
   () => {
+    if (isUpdatingFromStore.value) return;
     if (account.value) {
       const forge = account.value.automation.forge;
       forge.weaponPayload.weapon_name = weapon_name.value;
@@ -413,6 +435,31 @@ const handleAutoForge = async () => {
 const handleStop = () => {
   store.stopForge(props.userObj.token);
   ElMessage.info("自動鍛造背景任務已停止");
+};
+
+const isForging = computed(() => {
+  return props.profile?.activeStatuses?.includes("鍛造") || false;
+});
+
+const handleManualClaim = async () => {
+  try {
+    const res = await props.userObj.forgeComplete();
+    if (res && res.activeStatuses) {
+      emit("set-profile", res);
+      ElMessage.success("手動領取裝備成功");
+      await fetchRecipesAndMaterials();
+    } else {
+      console.error("Manual claim failed with response:", res);
+      const errMsg =
+        res?.response?.data?.message ||
+        res?.message ||
+        "領取失敗，鍛造可能尚未完成";
+      ElMessage.error(errMsg);
+    }
+  } catch (err: any) {
+    console.error("handleManualClaim exception:", err);
+    ElMessage.error(err.message || "領取時發生錯誤");
+  }
 };
 
 onMounted(async () => {
