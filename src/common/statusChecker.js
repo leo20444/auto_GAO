@@ -17,6 +17,15 @@ class statusCheck {
     switch (this.profile.actionStatus) {
       case "休息": {
         if (this.setting?.autoRest) {
+          const pMode = this.setting?.partyMode;
+          if (pMode && pMode.enabled && !pMode.isLeader) {
+            // 隊員不主動停止休息，等待隊長統一停止
+            console.log(
+              `[狀態檢查-自動休息] ${this.profile.name} 是隊員，等待隊長停止休息...`
+            );
+            return false;
+          }
+
           let targetSeconds = Number(this.setting.autoRestSeconds || 0);
           if (targetSeconds <= 0) {
             const seed = moment(this.profile.actionStart).valueOf();
@@ -31,40 +40,88 @@ class statusCheck {
           );
 
           if (elapsedSec >= targetSeconds) {
-            ElMessage(
-              `已休息 ${Math.floor(
-                elapsedSec
-              )} 秒 (目標 ${targetSeconds} 秒)，停止休息並檢查狀態...`
-            );
-            let profile = await this.user.restComplete();
-            if (profile) {
-              this.profile = profile;
-              await this.setProfileInfo(profile);
-            }
-
             const hpPercent = (this.profile.hp / this.profile.fullHp) * 100;
             const mpPercent = (this.profile.sp / this.profile.fullSp) * 100;
             const targetPercent = Number(this.setting.autoRestPercent ?? 90);
-            console.log(
-              `[狀態檢查-自動休息評估] ${this.profile.name} HP: ${Math.round(
-                hpPercent
-              )}%, SP: ${Math.round(mpPercent)}% | 目標門檻: ${targetPercent}%`
-            );
 
-            if (hpPercent >= targetPercent && mpPercent >= targetPercent) {
+            // 檢查組隊模式下成員是否就緒
+            let partyMembersReady = true;
+            if (pMode && pMode.enabled && pMode.isLeader) {
+              try {
+                const partyStatus = await this.user.getPartyStatus();
+                if (
+                  partyStatus &&
+                  partyStatus.party &&
+                  partyStatus.party.members
+                ) {
+                  const members = partyStatus.party.members;
+                  for (const member of members) {
+                    const isSelf =
+                      (this.profile.id &&
+                        Number(member.user_id) === Number(this.profile.id)) ||
+                      (this.profile.userId &&
+                        Number(member.user_id) ===
+                          Number(this.profile.userId)) ||
+                      (this.profile.user_id &&
+                        Number(member.user_id) ===
+                          Number(this.profile.user_id));
+
+                    if (isSelf) continue;
+
+                    const memberHpPercent = member.max_hp
+                      ? (member.hp / member.max_hp) * 100
+                      : 100;
+                    const memberMpPercent = member.max_mp
+                      ? (member.mp / member.max_mp) * 100
+                      : 100;
+
+                    if (
+                      memberHpPercent < targetPercent ||
+                      memberMpPercent < targetPercent
+                    ) {
+                      console.log(
+                        `[狀態檢查-自動休息評估] 隊員 ${
+                          member.character_name
+                        } 尚未就緒 (HP: ${Math.round(
+                          memberHpPercent
+                        )}%, SP: ${Math.round(
+                          memberMpPercent
+                        )}%)，隊長繼續休息...`
+                      );
+                      partyMembersReady = false;
+                      break;
+                    }
+                  }
+                }
+              } catch (e) {
+                console.error("[狀態檢查-自動休息評估] 獲取隊伍狀態失敗:", e);
+              }
+            }
+
+            if (
+              hpPercent >= targetPercent &&
+              mpPercent >= targetPercent &&
+              partyMembersReady
+            ) {
               ElMessage(
-                `HP (${Math.round(hpPercent)}%) 與 SP (${Math.round(
-                  mpPercent
-                )}%) 已達到 ${targetPercent}%，繼續戰鬥/移動！`
+                `已休息 ${Math.floor(
+                  elapsedSec
+                )} 秒 (目標 ${targetSeconds} 秒)，且全員狀態已達標。停止休息！`
               );
+              let profile = await this.user.restComplete();
+              if (profile) {
+                this.profile = profile;
+                await this.setProfileInfo(profile);
+              }
               return true;
             } else {
-              ElMessage(
-                `狀態未達 ${targetPercent}% (HP: ${Math.round(
+              console.log(
+                `[狀態檢查-自動休息評估] 狀態未達標，繼續在伺服器休息... (HP: ${Math.round(
                   hpPercent
-                )}%, SP: ${Math.round(mpPercent)}%)，重新開始休息...`
+                )}%, SP: ${Math.round(
+                  mpPercent
+                )}%, 隊員就緒: ${partyMembersReady})`
               );
-              await this.rest();
               return false;
             }
           }

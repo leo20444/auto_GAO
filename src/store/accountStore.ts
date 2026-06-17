@@ -650,6 +650,18 @@ async function startBattle(token: string) {
                       allMembersReady = false;
                     }
 
+                    // 檢查所在區域是否與隊長一致
+                    const isSameZone =
+                      memberAcc.profile.zoneName === acc.profile.zoneName;
+                    if (!isSameZone) {
+                      addLog(
+                        acc,
+                        "battle",
+                        `[組隊等待] 組員 ${member.character_name} 目前在 ${memberAcc.profile.zoneName}，與隊長所在區域 (${acc.profile.zoneName}) 不一致，等待其抵達...`
+                      );
+                      allMembersReady = false;
+                    }
+
                     const memberHpLimit =
                       memberAcc.automation.battle.setting.hp || 100;
                     const memberSpLimit =

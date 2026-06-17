@@ -258,10 +258,15 @@ function user(inputToken) {
         );
       } catch (error) {
         if (error.response?.status === 409) {
+          const errMsg =
+            error.response?.data?.message || error.response?.data || "";
           console.warn(
-            "[趕路衝突 409] 偵測到移動衝突，嘗試先確認落地 (moveComplete)..."
+            `[趕路衝突 409] 偵測到衝突: ${JSON.stringify(
+              errMsg
+            )}。嘗試清除移動與休息狀態...`
           );
           await this.moveComplete();
+          await this.restComplete();
           await sleep(500);
           chooseRes = await axios.post(
             `${baseurl}/tower/choose`,
@@ -320,10 +325,15 @@ function user(inputToken) {
         );
       } catch (error) {
         if (error.response?.status === 409) {
+          const errMsg =
+            error.response?.data?.message || error.response?.data || "";
           console.warn(
-            "[戰鬥衝突 409] 偵測到移動衝突，嘗試先確認落地 (moveComplete)..."
+            `[戰鬥衝突 409] 偵測到衝突: ${JSON.stringify(
+              errMsg
+            )}。嘗試清除移動與休息狀態...`
           );
           await this.moveComplete();
+          await this.restComplete();
           await sleep(500);
           chooseRes = await axios.post(
             `${baseurl}/tower/choose`,
