@@ -243,20 +243,32 @@ const getCharacterStatuses = (acc: any) => {
     list.push({ text: "秘境", type: "warning" as const });
   }
   const statuses = acc.profile?.activeStatuses || [];
+  const isBattleRunning = acc.automation?.battle?.running === true;
+  const isMiningRunning = acc.automation?.mining?.running === true;
+  const isForgeRunning = acc.automation?.forge?.running === true;
+
   if (statuses.length > 0) {
     statuses.forEach((status: string) => {
       switch (status) {
         case "戰鬥":
-          list.push({ text: "戰鬥", type: "danger" as const });
+          if (isBattleRunning) {
+            list.push({ text: "戰鬥", type: "danger" as const });
+          }
           break;
         case "採礦":
-          list.push({ text: "採集", type: "warning" as const });
+          if (isMiningRunning) {
+            list.push({ text: "採集", type: "warning" as const });
+          }
           break;
         case "休息":
-          list.push({ text: "休息", type: "success" as const });
+          if (isBattleRunning || isMiningRunning) {
+            list.push({ text: "休息", type: "success" as const });
+          }
           break;
         case "鍛造":
-          list.push({ text: "製作", type: "info" as const });
+          if (isForgeRunning) {
+            list.push({ text: "製作", type: "info" as const });
+          }
           break;
       }
     });
@@ -264,16 +276,24 @@ const getCharacterStatuses = (acc: any) => {
     const actionStatus = acc.profile.actionStatus;
     switch (actionStatus) {
       case "戰鬥":
-        list.push({ text: "戰鬥", type: "danger" as const });
+        if (isBattleRunning) {
+          list.push({ text: "戰鬥", type: "danger" as const });
+        }
         break;
       case "採礦":
-        list.push({ text: "採集", type: "warning" as const });
+        if (isMiningRunning) {
+          list.push({ text: "採集", type: "warning" as const });
+        }
         break;
       case "休息":
-        list.push({ text: "休息", type: "success" as const });
+        if (isBattleRunning || isMiningRunning) {
+          list.push({ text: "休息", type: "success" as const });
+        }
         break;
       case "鍛造":
-        list.push({ text: "製作", type: "info" as const });
+        if (isForgeRunning) {
+          list.push({ text: "製作", type: "info" as const });
+        }
         break;
     }
   }
