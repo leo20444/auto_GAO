@@ -233,24 +233,58 @@ const isAtSecretRealmFloor = (acc: any) => {
   return zoneName && huntStage && secretRealmConfig[zoneName] === huntStage;
 };
 
-const getCharacterStatus = (acc: any) => {
+const getCharacterStatuses = (acc: any) => {
+  const list: Array<{
+    text: string;
+    type: "danger" | "warning" | "success" | "info";
+    effect?: "plain" | "light" | "dark";
+  }> = [];
   if (acc.profile?.inSecretRealm === true && isAtSecretRealmFloor(acc)) {
-    return { text: "秘境", type: "warning" as const };
+    list.push({ text: "秘境", type: "warning" as const });
   }
   const statuses = acc.profile?.activeStatuses || [];
-  const primaryStatus = statuses[0] || acc.profile?.actionStatus || "空閒";
-  switch (primaryStatus) {
-    case "戰鬥":
-      return { text: "戰鬥", type: "danger" as const };
-    case "採礦":
-      return { text: "採集", type: "warning" as const };
-    case "休息":
-      return { text: "休息", type: "success" as const };
-    case "鍛造":
-      return { text: "製作", type: "info" as const };
-    default:
-      return { text: "空閒", type: "info" as const, effect: "plain" as const };
+  if (statuses.length > 0) {
+    statuses.forEach((status: string) => {
+      switch (status) {
+        case "戰鬥":
+          list.push({ text: "戰鬥", type: "danger" as const });
+          break;
+        case "採礦":
+          list.push({ text: "採集", type: "warning" as const });
+          break;
+        case "休息":
+          list.push({ text: "休息", type: "success" as const });
+          break;
+        case "鍛造":
+          list.push({ text: "製作", type: "info" as const });
+          break;
+      }
+    });
+  } else if (acc.profile?.actionStatus) {
+    const actionStatus = acc.profile.actionStatus;
+    switch (actionStatus) {
+      case "戰鬥":
+        list.push({ text: "戰鬥", type: "danger" as const });
+        break;
+      case "採礦":
+        list.push({ text: "採集", type: "warning" as const });
+        break;
+      case "休息":
+        list.push({ text: "休息", type: "success" as const });
+        break;
+      case "鍛造":
+        list.push({ text: "製作", type: "info" as const });
+        break;
+    }
   }
+  if (list.length === 0) {
+    list.push({
+      text: "空閒",
+      type: "info" as const,
+      effect: "plain" as const,
+    });
+  }
+  return list;
 };
 
 const manualEnterSecretRealm = async (acc: any) => {
@@ -378,7 +412,12 @@ const getAvatarBgColor = (acc: any) => {
                   }})
                 </div>
                 <div>
-                  狀態: <b>{{ getCharacterStatus(acc).text }}</b>
+                  狀態:
+                  <b>{{
+                    getCharacterStatuses(acc)
+                      .map((s: any) => s.text)
+                      .join("+")
+                  }}</b>
                 </div>
                 <div style="margin: 4px 0" v-if="acc.profile">
                   HP: {{ acc.profile.hp }}/{{ acc.profile.fullHp }} | SP:
@@ -410,7 +449,12 @@ const getAvatarBgColor = (acc: any) => {
                     {{ getNicknameFirstChar(acc) }}
                   </div>
                   <!-- 右下角狀態小點 -->
-                  <div :class="['status-dot', getCharacterStatus(acc).type]" />
+                  <div
+                    :class="[
+                      'status-dot',
+                      getCharacterStatuses(acc)[0]?.type || 'info',
+                    ]"
+                  />
                 </div>
               </template>
 
@@ -438,15 +482,22 @@ const getAvatarBgColor = (acc: any) => {
                     >
                       進秘境
                     </el-button>
-                    <el-tag
+                    <div
                       v-else-if="acc.profile"
-                      :type="getCharacterStatus(acc).type"
-                      :effect="getCharacterStatus(acc).effect || 'light'"
-                      size="small"
-                      class="status-tag"
+                      class="status-tags-container"
+                      style="display: flex; gap: 4px; align-items: center"
                     >
-                      {{ getCharacterStatus(acc).text }}
-                    </el-tag>
+                      <el-tag
+                        v-for="(status, idx) in getCharacterStatuses(acc)"
+                        :key="idx"
+                        :type="status.type"
+                        :effect="status.effect || 'light'"
+                        size="small"
+                        class="status-tag"
+                      >
+                        {{ status.text }}
+                      </el-tag>
+                    </div>
                   </div>
 
                   <!-- 裝備與防具懸停顯示 -->
@@ -649,15 +700,22 @@ const getAvatarBgColor = (acc: any) => {
                   >
                     進秘境
                   </el-button>
-                  <el-tag
+                  <div
                     v-else-if="acc.profile"
-                    :type="getCharacterStatus(acc).type"
-                    :effect="getCharacterStatus(acc).effect || 'light'"
-                    size="small"
-                    class="status-tag"
+                    class="status-tags-container"
+                    style="display: flex; gap: 4px; align-items: center"
                   >
-                    {{ getCharacterStatus(acc).text }}
-                  </el-tag>
+                    <el-tag
+                      v-for="(status, idx) in getCharacterStatuses(acc)"
+                      :key="idx"
+                      :type="status.type"
+                      :effect="status.effect || 'light'"
+                      size="small"
+                      class="status-tag"
+                    >
+                      {{ status.text }}
+                    </el-tag>
+                  </div>
                 </div>
 
                 <!-- 裝備與防具懸停顯示 -->
