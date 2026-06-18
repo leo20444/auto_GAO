@@ -805,11 +805,16 @@ async function startBattle(token: string) {
                     );
                     if (memberAcc) {
                       // A. 我方託管組員
+                      // 孤狼帶隊模式：完全無視所有我方組員狀態，直接跳過
+                      if (pMode.ignoreMemberStatus) {
+                        continue;
+                      }
+
                       // 先檢測是否死亡
                       const isMemberDead =
                         memberAcc.profile.actionStatus === "重生" ||
                         memberAcc.profile.hp <= 0;
-                      if (isMemberDead && !pMode.ignoreMemberStatus) {
+                      if (isMemberDead) {
                         if (pMode.deathPolicy === "rerun") {
                           addLog(
                             acc,
