@@ -302,7 +302,6 @@ const getWaitingBossStatus = (acc: any) => {
     starting_town: 0,
     大草原: 1,
     great_plains: 1,
-    猛牛原: 2,
     猛牛園: 2,
     bull_garden: 2,
     bull_pen: 2,

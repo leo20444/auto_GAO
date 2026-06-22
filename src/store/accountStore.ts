@@ -1280,7 +1280,7 @@ async function startBattle(token: string) {
 
               const bossFloors: Record<number, number> = {
                 1: 30, // 大草原 30F
-                2: 25, // 猛牛原/猛牛園 25F
+                2: 25, // 猛牛園 25F
                 3: 18, // 兒童樂園 18F
                 4: 24, // 蘑菇園 24F
                 5: 20, // 圓明園 20F
