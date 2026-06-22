@@ -114,7 +114,7 @@ const handleExport = () => {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `sgo_backup_${new Date().toISOString().slice(0, 10)}.json`;
+  a.download = `gao_backup_${new Date().toISOString().slice(0, 10)}.json`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -233,14 +233,120 @@ const isAtSecretRealmFloor = (acc: any) => {
   return zoneName && huntStage && secretRealmConfig[zoneName] === huntStage;
 };
 
+const isLotteryReset = (lastTimeStr: string) => {
+  if (!lastTimeStr) return true;
+  const lastTime = new Date(lastTimeStr);
+  const now = new Date();
+
+  const lastOffset = new Date(lastTime.getTime() - 8 * 60 * 60 * 1000);
+  const nowOffset = new Date(now.getTime() - 8 * 60 * 60 * 1000);
+
+  const lastDate = `${lastOffset.getFullYear()}-${
+    lastOffset.getMonth() + 1
+  }-${lastOffset.getDate()}`;
+  const nowDate = `${nowOffset.getFullYear()}-${
+    nowOffset.getMonth() + 1
+  }-${nowOffset.getDate()}`;
+
+  return lastDate !== nowDate;
+};
+
+const getLotteryStatus = (acc: any) => {
+  if (!acc || !acc.profile) return null;
+
+  if (acc.lotteryProgressState === "處理中") {
+    return {
+      text: "樂透: 購買中...",
+      type: "info" as const,
+      effect: "dark" as const,
+    };
+  }
+  if (acc.lotteryProgressState?.startsWith("失敗")) {
+    return {
+      text: acc.lotteryProgressState,
+      type: "danger" as const,
+      effect: "light" as const,
+    };
+  }
+
+  const lotteryConfig = acc.automation?.lottery || {};
+  const isCollectReset = isLotteryReset(lotteryConfig.lastCollectedAt);
+  const isBuyReset = isLotteryReset(lotteryConfig.lastBoughtAt);
+
+  if (!isCollectReset && !isBuyReset) {
+    return {
+      text: "樂透: 已買",
+      type: "success" as const,
+      effect: "plain" as const,
+    };
+  }
+
+  return {
+    text: "樂透: 未買",
+    type: "danger" as const,
+    effect: "light" as const,
+  };
+};
+
+const getWaitingBossStatus = (acc: any) => {
+  if (!acc || !acc.profile || !acc.tower) return null;
+
+  const isBattleRunning = acc.automation?.battle?.running === true;
+  const autoChallenge =
+    acc.automation?.battle?.setting?.bossSoloMode === "wait";
+
+  if (!isBattleRunning || !autoChallenge) return null;
+
+  const mapMapping: Record<string, number> = {
+    起始之鎮: 0,
+    starting_town: 0,
+    大草原: 1,
+    great_plains: 1,
+    猛牛原: 2,
+    猛牛園: 2,
+    bull_garden: 2,
+    bull_pen: 2,
+    兒童樂園: 3,
+    childrens_park: 3,
+    蘑菇園: 4,
+    mushroom_garden: 4,
+    圓明園: 5,
+    yuanmingyuan: 5,
+  };
+
+  const zoneName = acc.profile.zoneName;
+  const currentMapId = mapMapping[zoneName] || 0;
+  const floor = acc.profile.huntStage || 0;
+
+  const bossFloorConfig: Record<number, number> = {
+    1: 30,
+    2: 25,
+    3: 18,
+    4: 24,
+    5: 20,
+  };
+
+  const isBossFloor = bossFloorConfig[currentMapId] === floor && floor > 0;
+  if (!isBossFloor) return null;
+
+  const cooldownEnds = acc.tower.bossCooldownEndsAt;
+  if (cooldownEnds) {
+    const isCd = new Date(cooldownEnds).getTime() > Date.now();
+    if (isCd) {
+      return { text: "等待BOSS", type: "warning" as const };
+    }
+  }
+  return null;
+};
+
 const getCharacterStatuses = (acc: any) => {
   const list: Array<{
     text: string;
-    type: "danger" | "warning" | "success" | "info";
+    type: "danger" | "warning" | "success" | "info" | "";
     effect?: "plain" | "light" | "dark";
   }> = [];
   if (acc.profile?.inSecretRealm === true && isAtSecretRealmFloor(acc)) {
-    list.push({ text: "秘境", type: "warning" as const });
+    list.push({ text: "秘徑", type: "warning" as const });
   }
   const statuses = acc.profile?.activeStatuses || [];
   const isBattleRunning = acc.automation?.battle?.running === true;
@@ -304,6 +410,17 @@ const getCharacterStatuses = (acc: any) => {
       effect: "plain" as const,
     });
   }
+
+  // 加入樂透與等待 BOSS 狀態標籤
+  const lotteryStatus = getLotteryStatus(acc);
+  if (lotteryStatus) {
+    list.push(lotteryStatus);
+  }
+  const bossStatus = getWaitingBossStatus(acc);
+  if (bossStatus) {
+    list.push(bossStatus);
+  }
+
   return list;
 };
 
@@ -312,14 +429,14 @@ const manualEnterSecretRealm = async (acc: any) => {
     const res = await acc.userObj.enterSecretRealm();
     if (res && !res.error) {
       acc.profile.inSecretRealm = true;
-      ElMessage.success(`${acc.profile.nickname} 已成功進入秘境！`);
+      ElMessage.success(`${acc.profile.nickname} 已成功進入秘徑！`);
     } else {
       ElMessage.error(
-        `${acc.profile.nickname} 進入秘境失敗: ${res?.message || "未知錯誤"}`
+        `${acc.profile.nickname} 進入秘徑失敗: ${res?.message || "未知錯誤"}`
       );
     }
   } catch (e) {
-    ElMessage.error(`進入秘境操作失敗`);
+    ElMessage.error(`進入秘徑操作失敗`);
   }
 };
 
@@ -380,7 +497,7 @@ const getAvatarBgColor = (acc: any) => {
     >
       <!-- Header -->
       <div class="sidebar-header">
-        <h2 class="title" v-if="!isCollapsed">auto-sgo</h2>
+        <h2 class="title" v-if="!isCollapsed">auto-gao</h2>
         <div class="header-actions" v-if="!isCollapsed">
           <el-button
             :icon="Plus"
@@ -500,24 +617,29 @@ const getAvatarBgColor = (acc: any) => {
                       "
                       @click.stop="manualEnterSecretRealm(acc)"
                     >
-                      進秘境
+                      進秘徑
                     </el-button>
-                    <div
-                      v-else-if="acc.profile"
-                      class="status-tags-container"
-                      style="display: flex; gap: 4px; align-items: center"
+                  </div>
+                  <div
+                    v-if="acc.profile"
+                    class="status-tags-row"
+                    style="
+                      display: flex;
+                      gap: 4px;
+                      flex-wrap: wrap;
+                      margin-top: 4px;
+                    "
+                  >
+                    <el-tag
+                      v-for="(status, idx) in getCharacterStatuses(acc)"
+                      :key="idx"
+                      :type="status.type"
+                      :effect="status.effect || 'light'"
+                      size="small"
+                      class="status-tag"
                     >
-                      <el-tag
-                        v-for="(status, idx) in getCharacterStatuses(acc)"
-                        :key="idx"
-                        :type="status.type"
-                        :effect="status.effect || 'light'"
-                        size="small"
-                        class="status-tag"
-                      >
-                        {{ status.text }}
-                      </el-tag>
-                    </div>
+                      {{ status.text }}
+                    </el-tag>
                   </div>
 
                   <!-- 裝備與防具懸停顯示 -->
@@ -671,7 +793,7 @@ const getAvatarBgColor = (acc: any) => {
       <div class="sidebar" style="height: 100%; width: 100%">
         <!-- Header -->
         <div class="sidebar-header">
-          <h2 class="title">auto-sgo</h2>
+          <h2 class="title">auto-gao</h2>
           <el-button
             :icon="Plus"
             circle
@@ -718,24 +840,29 @@ const getAvatarBgColor = (acc: any) => {
                     "
                     @click.stop="manualEnterSecretRealm(acc)"
                   >
-                    進秘境
+                    進秘徑
                   </el-button>
-                  <div
-                    v-else-if="acc.profile"
-                    class="status-tags-container"
-                    style="display: flex; gap: 4px; align-items: center"
+                </div>
+                <div
+                  v-if="acc.profile"
+                  class="status-tags-row"
+                  style="
+                    display: flex;
+                    gap: 4px;
+                    flex-wrap: wrap;
+                    margin-top: 4px;
+                  "
+                >
+                  <el-tag
+                    v-for="(status, idx) in getCharacterStatuses(acc)"
+                    :key="idx"
+                    :type="status.type"
+                    :effect="status.effect || 'light'"
+                    size="small"
+                    class="status-tag"
                   >
-                    <el-tag
-                      v-for="(status, idx) in getCharacterStatuses(acc)"
-                      :key="idx"
-                      :type="status.type"
-                      :effect="status.effect || 'light'"
-                      size="small"
-                      class="status-tag"
-                    >
-                      {{ status.text }}
-                    </el-tag>
-                  </div>
+                    {{ status.text }}
+                  </el-tag>
                 </div>
 
                 <!-- 裝備與防具懸停顯示 -->
@@ -820,7 +947,7 @@ const getAvatarBgColor = (acc: any) => {
       <!-- 手機模式下的頂部 Header -->
       <el-header v-if="isMobile" class="mobile-top-header">
         <el-button :icon="Menu" circle @click="drawerVisible = true" />
-        <span class="mobile-title">auto-sgo</span>
+        <span class="mobile-title">auto-gao</span>
         <el-button
           v-if="selectedAccount"
           type="info"
@@ -1089,6 +1216,8 @@ body {
   white-space: nowrap;
   text-overflow: ellipsis;
   overflow: hidden;
+  flex: 1;
+  min-width: 0;
 }
 
 .account-stats {

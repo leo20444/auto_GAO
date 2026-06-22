@@ -10,8 +10,38 @@
           <el-tag :type="statusType" size="small" class="status-tag">{{
             selectedAccount.profile.actionStatus
           }}</el-tag>
+          <!-- 樂透標籤 -->
+          <el-tag
+            v-if="getLotteryStatus(selectedAccount)"
+            :type="getLotteryStatus(selectedAccount).type"
+            :effect="getLotteryStatus(selectedAccount).effect"
+            size="small"
+            class="status-tag"
+            style="margin-left: 6px"
+          >
+            {{ getLotteryStatus(selectedAccount).text }}
+          </el-tag>
+          <!-- 等待 BOSS 標籤 -->
+          <el-tag
+            v-if="getWaitingBossStatus(selectedAccount)"
+            :type="getWaitingBossStatus(selectedAccount).type"
+            size="small"
+            class="status-tag"
+            style="margin-left: 6px"
+          >
+            {{ getWaitingBossStatus(selectedAccount).text }}
+          </el-tag>
         </div>
-        <div class="header-right">
+        <div
+          class="header-right"
+          style="display: flex; gap: 12px; align-items: center"
+        >
+          <el-button
+            type="warning"
+            :loading="isLotteryRunning"
+            @click="handleOneClickLottery"
+            >一鍵樂透</el-button
+          >
           <el-button type="primary" plain @click="refreshProfile"
             >立即重新整理</el-button
           >
@@ -275,7 +305,7 @@
                         type="danger"
                         effect="dark"
                         size="small"
-                        >秘境中</el-tag
+                        >秘徑中</el-tag
                       >
                       <el-tag v-else type="info" size="small">普通地圖</el-tag>
                       <el-tag
@@ -296,7 +326,7 @@
                       >
                       <el-tag
                         v-if="selectedAccount.tower.hasExit"
-                        type="primary"
+                        type="info"
                         size="small"
                         >有出口</el-tag
                       >
@@ -365,6 +395,7 @@
 
 <script lang="ts" setup>
 import { ref, computed } from "vue";
+import { ElMessage } from "element-plus";
 import { useAccountStore } from "../store/accountStore";
 import { Location } from "@element-plus/icons-vue";
 import AutoBattle from "../components/AutoBattle.vue";
@@ -404,6 +435,112 @@ const triggerAdd = () => {
 const formatTime = (timeStr: string) => {
   if (!timeStr) return "";
   return moment(timeStr).format("MM-DD HH:mm:ss");
+};
+
+const isLotteryRunning = ref(false);
+
+const handleOneClickLottery = async () => {
+  isLotteryRunning.value = true;
+  try {
+    const res = await store.oneClickLotteryAll();
+    ElMessage.success(
+      `一鍵樂透執行完畢！成功: ${res.successCount}，失敗: ${res.failCount}`
+    );
+  } catch (err: any) {
+    ElMessage.error(`樂透執行失敗: ${err.message || err}`);
+  } finally {
+    isLotteryRunning.value = false;
+  }
+};
+
+const isLotteryReset = (lastTimeStr: string) => {
+  if (!lastTimeStr) return true;
+  const lastTime = new Date(lastTimeStr);
+  const now = new Date();
+
+  const lastOffset = new Date(lastTime.getTime() - 8 * 60 * 60 * 1000);
+  const nowOffset = new Date(now.getTime() - 8 * 60 * 60 * 1000);
+
+  const lastDate = `${lastOffset.getFullYear()}-${
+    lastOffset.getMonth() + 1
+  }-${lastOffset.getDate()}`;
+  const nowDate = `${nowOffset.getFullYear()}-${
+    nowOffset.getMonth() + 1
+  }-${nowOffset.getDate()}`;
+
+  return lastDate !== nowDate;
+};
+
+const getLotteryStatus = (acc: any) => {
+  if (!acc || !acc.profile) return null;
+
+  if (acc.lotteryProgressState === "處理中") {
+    return { text: "樂透: 購買中...", type: "primary", effect: "dark" };
+  }
+  if (acc.lotteryProgressState?.startsWith("失敗")) {
+    return { text: acc.lotteryProgressState, type: "danger", effect: "light" };
+  }
+
+  const lotteryConfig = acc.automation?.lottery || {};
+  const isCollectReset = isLotteryReset(lotteryConfig.lastCollectedAt);
+  const isBuyReset = isLotteryReset(lotteryConfig.lastBoughtAt);
+
+  if (!isCollectReset && !isBuyReset) {
+    return { text: "樂透: 已買", type: "success", effect: "plain" };
+  }
+
+  return { text: "樂透: 未買", type: "danger", effect: "light" };
+};
+
+const getWaitingBossStatus = (acc: any) => {
+  if (!acc || !acc.profile || !acc.tower) return null;
+
+  const isBattleRunning = acc.automation?.battle?.running === true;
+  const autoChallenge =
+    acc.automation?.battle?.setting?.bossSoloMode === "wait";
+
+  if (!isBattleRunning || !autoChallenge) return null;
+
+  const mapMapping: Record<string, number> = {
+    起始之鎮: 0,
+    starting_town: 0,
+    大草原: 1,
+    great_plains: 1,
+    猛牛原: 2,
+    猛牛園: 2,
+    bull_garden: 2,
+    bull_pen: 2,
+    兒童樂園: 3,
+    childrens_park: 3,
+    蘑菇園: 4,
+    mushroom_garden: 4,
+    圓明園: 5,
+    yuanmingyuan: 5,
+  };
+
+  const zoneName = acc.profile.zoneName;
+  const currentMapId = mapMapping[zoneName] || 0;
+  const floor = acc.profile.huntStage || 0;
+
+  const bossFloorConfig: Record<number, number> = {
+    1: 30,
+    2: 25,
+    3: 18,
+    4: 24,
+    5: 20,
+  };
+
+  const isBossFloor = bossFloorConfig[currentMapId] === floor && floor > 0;
+  if (!isBossFloor) return null;
+
+  const cooldownEnds = acc.tower.bossCooldownEndsAt;
+  if (cooldownEnds) {
+    const isCd = new Date(cooldownEnds).getTime() > Date.now();
+    if (isCd) {
+      return { text: "等待BOSS", type: "warning" };
+    }
+  }
+  return null;
 };
 </script>
 

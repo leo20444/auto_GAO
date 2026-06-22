@@ -1,5 +1,4 @@
 import map from "../common/mapping";
-import specialMap from "../common/specialMap";
 const ElMessage = (msg) => console.log("[自動化訊息]", msg);
 ElMessage.success = (msg) => console.log("[自動化成功]", msg);
 ElMessage.warning = (msg) => console.warn("[自動化警告]", msg);
@@ -35,14 +34,52 @@ class autoBattleChecker {
 
     // 如果是組隊中的隊員，且目前本機顯示在起始之鎮，而目標不是起始之鎮
     // 隊長可能已帶隊移動，將隊員拉過去了，所以此時先嘗試確認落地一次
-    if (isMember && this.profile.zoneName === "起始之鎮" && mapId !== 0) {
+    if (
+      isMember &&
+      getMapIdByName(this.profile.zoneName) === 0 &&
+      mapId !== 0
+    ) {
       console.log("[隊員落地檢查] 隊長可能已帶隊移動，嘗試直接確認落地...");
       const arriveRes = await this.user.moveComplete();
-      if (arriveRes && !arriveRes.error && arriveRes.zoneName !== "起始之鎮") {
+      if (
+        arriveRes &&
+        !arriveRes.error &&
+        getMapIdByName(arriveRes.zoneName) !== 0
+      ) {
         ElMessage("隊員跟隨：確認落地成功，抵達 " + arriveRes.zoneName);
         this.setProfileInfo(arriveRes);
         this.profile = arriveRes;
         return arriveRes;
+      }
+    }
+
+    // 統一以設定表 ID 進行回城與水晶判定
+    if (mapId === 0 && this.setting.useTeleportCrystal) {
+      const currentAcc = this.allAccounts?.find(
+        (a) => a.token === this.user.token
+      );
+      const crystal = currentAcc?.items?.items?.find(
+        (item) => item.item_id === 173 || item.id === 173
+      );
+      const quantity = crystal ? crystal.quantity : 0;
+      if (quantity > 0) {
+        ElMessage("偵測到啟用轉移水晶且庫存 > 0，發送傳送水晶請求...");
+        const useRes = await this.user.useTeleportCrystal();
+        if (useRes && !useRes.error) {
+          ElMessage("使用轉移水晶回城成功！");
+          const profile = await this.user.getProfile();
+          if (profile) {
+            this.setProfileInfo(profile);
+            this.profile = profile;
+          }
+          return profile;
+        } else {
+          ElMessage.error(
+            "使用轉移水晶失敗: " + (useRes?.message || "未知錯誤")
+          );
+        }
+      } else {
+        ElMessage("轉移水晶庫存不足，退化為普通回城。");
       }
     }
 
@@ -62,17 +99,15 @@ class autoBattleChecker {
         this.setProfileInfo(arriveRes);
         this.profile = arriveRes;
 
-        // arrive 後確認是否已在目標地圖，若是則不再發 move（避免二次 409）
         const targetMap = map.find((item) => item.id === mapId);
         const alreadyThere =
           mapId === 0
-            ? arriveRes.zoneName === "起始之鎮"
+            ? getMapIdByName(arriveRes.zoneName) === 0
             : targetMap && arriveRes.zoneName === targetMap.name;
 
         if (alreadyThere) {
           moveRes = arriveRes;
         } else {
-          // 給伺服器短暫緩衝後重新發 move
           await sleep(500);
           moveRes = await this.user.move(mapId);
           if (moveRes && !moveRes.error) {
@@ -129,51 +164,51 @@ class autoBattleChecker {
       `[HP/SP 檢查] ${this.profile.name} - 當前 HP: ${this.profile.hp}/${this.profile.fullHp} (設定門檻: ${this.setting.hp}), SP: ${this.profile.sp}/${this.profile.fullSp} (設定門檻: ${this.setting.sp})`
     );
 
-    // 1. 檢查 HP (如果已經 100% 滿則不觸發休息，避免設定大於上限造成的無限休息死循環)
+    // 1. 檢查 HP
     if (
       this.profile.hp < this.profile.fullHp &&
       this.profile.hp <= this.setting.hp
     ) {
-      if (hpMode === "medicine") {
+      if (hpMode === "medicine" && this.medicineCheckTag) {
         ElMessage("HP 低於設定，嘗試吃藥...");
         const eatSuccess = await this.eatMedicine(
           this.medicineSetting.medicineHpId,
           this.medicineSetting.medicineHpQuantity
         );
-        if (eatSuccess && this.profile.hp > this.setting.hp) {
-          ElMessage("HP 吃藥成功補滿至門檻以上。");
+        if (eatSuccess) {
+          ElMessage("HP 吃藥成功，繼續下個步驟。");
         } else {
-          ElMessage("HP 補品不足或補不滿，自動降級為休息！");
+          ElMessage("HP 補品不足或使用失敗，自動降級為休息！");
           await this.rest();
           return false;
         }
       } else {
-        ElMessage("HP 低於門檻，自動休息！");
+        ElMessage("HP 低於門檻 (或吃藥未啟動)，自動休息！");
         await this.rest();
         return false;
       }
     }
 
-    // 2. 檢查 SP (如果已經 100% 滿則不觸發休息，避免設定大於上限造成的無限休息死循環)
+    // 2. 檢查 SP
     if (
       this.profile.sp < this.profile.fullSp &&
       this.profile.sp <= this.setting.sp
     ) {
-      if (spMode === "medicine") {
+      if (spMode === "medicine" && this.medicineCheckTag) {
         ElMessage("SP 低於設定，嘗試吃藥...");
         const eatSuccess = await this.eatMedicine(
           this.medicineSetting.medicineSpId,
           this.medicineSetting.medicineSpQuantity
         );
-        if (eatSuccess && this.profile.sp > this.setting.sp) {
-          ElMessage("SP 吃藥成功補滿至門檻以上。");
+        if (eatSuccess) {
+          ElMessage("SP 吃藥成功，繼續下個步驟。");
         } else {
-          ElMessage("SP 補品不足或補不滿，自動降級為休息！");
+          ElMessage("SP 補品不足或使用失敗，自動降級為休息！");
           await this.rest();
           return false;
         }
       } else {
-        ElMessage("SP 低於門檻，自動休息！");
+        ElMessage("SP 低於門檻 (或吃藥未啟動)，自動休息！");
         await this.rest();
         return false;
       }
@@ -188,36 +223,73 @@ class autoBattleChecker {
       return false;
     }
 
+    const currentMapId = getMapIdByName(this.profile.zoneName);
+
     // 1. 如果角色當前在「起始之鎮」
-    if (this.profile.zoneName === "起始之鎮") {
-      const autoRestEnabled = !!this.setting?.autoRest;
-      if (autoRestEnabled) {
-        const targetPercent = Number(this.setting.autoRestPercent ?? 90);
-        const hpPercent = (this.profile.hp / this.profile.fullHp) * 100;
-        const mpPercent = (this.profile.sp / this.profile.fullSp) * 100;
+    if (currentMapId === 0) {
+      const hpLimit = this.setting.hp || 0;
+      const spLimit = this.setting.sp || 0;
+      const hpMode = this.setting.hpRecoveryMode || "rest";
+      const spMode = this.setting.spRecoveryMode || "rest";
 
-        const isHpAboveThreshold = this.profile.hp > (this.setting.hp || 0);
-        const isSpAboveThreshold = this.profile.sp > (this.setting.sp || 0);
+      const needHpRest =
+        this.profile.hp < this.profile.fullHp &&
+        this.profile.hp <= hpLimit &&
+        hpMode === "rest";
+      const needSpRest =
+        this.profile.sp < this.profile.fullSp &&
+        this.profile.sp <= spLimit &&
+        spMode === "rest";
 
-        // 檢查是否需要休息（血量或魔量未達標，或低於保護門檻）
-        if (
-          hpPercent < targetPercent ||
-          mpPercent < targetPercent ||
-          !isHpAboveThreshold ||
-          !isSpAboveThreshold
-        ) {
-          ElMessage(`回城休息中，補滿狀態至門檻 (${targetPercent}%)...`);
-          await this.rest(); // 發起休息
-          return false; // 等待休息完成
+      // 合併自動休息：直接以極限保護絕對值判定是否需要留在城內休息
+      if (needHpRest || needSpRest) {
+        ElMessage("低於極限保護設定且模式為休息，自動留在起始之鎮補狀態...");
+        await this.rest();
+        return false;
+      }
+
+      // 起始之鎮商店自動補貨傳送水晶
+      if (this.setting.useTeleportCrystal) {
+        const currentAcc = this.allAccounts?.find(
+          (a) => a.token === this.user.token
+        );
+        const crystal = currentAcc?.items?.items?.find(
+          (item) => item.item_id === 173 || item.id === 173
+        );
+        const count = crystal ? crystal.quantity : 0;
+        if (count < 2) {
+          const buyQty = 10 - count;
+          ElMessage(
+            `偵測到轉移水晶庫存不足 (現有 ${count} 個)，啟動自動補貨至 10 個...`
+          );
+          for (let i = 0; i < buyQty; i++) {
+            ElMessage(`正在購買轉移水晶 (${i + 1}/${buyQty})...`);
+            const buyRes = await this.user.buyShopItem(22, 1); // 22 是轉移水晶的 shopItemId
+            if (buyRes && !buyRes.error) {
+              if (crystal) crystal.quantity += 1;
+            } else {
+              ElMessage.error(
+                "購買轉移水晶失敗: " + (buyRes?.message || "未知錯誤")
+              );
+              break;
+            }
+            await sleep(800);
+          }
+          const itemsRes = await this.user.item();
+          if (itemsRes && currentAcc) {
+            currentAcc.items.equipments = itemsRes.equipments || [];
+            currentAcc.items.items = itemsRes.items || [];
+          }
         }
       }
     }
 
-    // 2. 判斷是否到秘境
-    if (
-      specialMap.includes(this.setting.map) &&
-      this.profile.zoneName != this.setting.map
-    ) {
+    const targetMapId = getMapIdByName(this.setting.map);
+
+    // 2. 判斷是否為秘徑地圖 (1001 草原秘徑, 2001 被詛咒的寺院, 4001 菇菇仙境)
+    const isSpecialMap =
+      targetMapId === 1001 || targetMapId === 2001 || targetMapId === 4001;
+    if (isSpecialMap && currentMapId !== targetMapId) {
       if (await this.checkSpecialMap()) {
         return true;
       } else {
@@ -226,10 +298,10 @@ class autoBattleChecker {
     }
 
     // 3. 移動到目標地圖
-    if (this.profile.zoneName !== this.setting.map) {
+    if (currentMapId !== targetMapId) {
       const pMode = this.setting.partyMode;
       if (
-        this.profile.zoneName === "起始之鎮" &&
+        currentMapId === 0 &&
         pMode &&
         pMode.enabled &&
         !pMode.ignoreMemberStatus
@@ -243,11 +315,12 @@ class autoBattleChecker {
                 aParty &&
                 aParty.enabled &&
                 aParty.isLeader &&
-                a.automation.battle.setting.map === this.setting.map
+                getMapIdByName(a.automation.battle.setting.map) === targetMapId
               );
             });
             if (leaderAcc) {
-              const isLeaderInTown = leaderAcc.profile.zoneName === "起始之鎮";
+              const isLeaderInTown =
+                getMapIdByName(leaderAcc.profile.zoneName) === 0;
               const isLeaderMoving = leaderAcc.profile.actionStatus === "移動";
               if (isLeaderInTown && !isLeaderMoving) {
                 ElMessage("組隊同步：等待隊長出發...");
@@ -262,7 +335,6 @@ class autoBattleChecker {
               let allReady = true;
 
               for (const member of members) {
-                // 排除隊長自己
                 if (
                   Number(member.user_id) === Number(this.profile.id) ||
                   Number(member.user_id) === Number(this.profile.userId) ||
@@ -271,7 +343,6 @@ class autoBattleChecker {
                   continue;
                 }
 
-                // 尋找我方託管組員
                 const memberAcc = this.allAccounts.find(
                   (a) =>
                     (a.profile.id &&
@@ -283,13 +354,11 @@ class autoBattleChecker {
                 );
 
                 if (memberAcc) {
-                  // 1. 必須回到起始之鎮
-                  if (memberAcc.profile.zoneName !== "起始之鎮") {
+                  if (getMapIdByName(memberAcc.profile.zoneName) !== 0) {
                     allReady = false;
                     break;
                   }
 
-                  // 2. 必須不忙碌 (排除重生、移動、鍛造，允許空閒、休息)
                   const isBusy =
                     memberAcc.profile.actionStatus !== "空閒" &&
                     memberAcc.profile.actionStatus !== "休息" &&
@@ -299,7 +368,6 @@ class autoBattleChecker {
                     break;
                   }
 
-                  // 3. HP / SP 必須滿足
                   const mSetting = memberAcc.automation.battle.setting;
                   const hpLimit = mSetting.hp || 100;
                   const spLimit = mSetting.sp || 150;
@@ -312,7 +380,6 @@ class autoBattleChecker {
                     break;
                   }
 
-                  // 4. 武器耐久必須就緒
                   const minDur = pMode.minDurability || 10;
                   const memberEquips = memberAcc.items.equipments || [];
                   const equippedWeapons = memberEquips.filter(
@@ -356,14 +423,12 @@ class autoBattleChecker {
       }
 
       ElMessage("地圖不對，前往目標地圖！");
-      await this.safeMove(getMapIdByName(this.setting.map));
+      await this.safeMove(targetMapId);
       ElMessage("移動！");
       return false;
     }
 
     // 4. 層數上限檢查
-    // 只有在 setting.mapLevel 大於 0 的時候才進行層數上限檢查，若為 0 則代表無上限
-    // 組隊模式下（不論隊長或隊員）跳過個人層數上限，改由隊長的「隊伍層數上限 (maxFloor)」統一控管
     const pMode = this.setting.partyMode;
     const isInParty = pMode && pMode.enabled;
     if (
@@ -374,7 +439,7 @@ class autoBattleChecker {
       ElMessage(
         `已達到目標層數 (${this.profile.huntStage}F >= ${this.setting.mapLevel}F)，正在回城休息...`
       );
-      await this.safeMove(0); // 移回起始之鎮 (0)
+      await this.safeMove(0);
       ElMessage("回城！");
       return false;
     }
@@ -383,58 +448,71 @@ class autoBattleChecker {
   };
 
   checkSpecialMap = async () => {
-    switch (this.setting.map) {
-      case "草原秘徑":
-        //還沒到秘境
-        if (this.profile.zoneName == "大草原") {
-          if (Number(this.profile.huntStage) == 16) {
-            let profile = await this.user.path(
-              getMapIdByName(this.setting.map)
-            );
-            this.setProfileInfo(profile);
-            ElMessage("進入秘境！");
-            return true;
-          } else if (Number(this.profile.huntStage) > 16) {
-            ElMessage("層數超過！");
-            await this.safeMove(0);
-            ElMessage("回城！");
-          }
-          return true;
-        } else {
-          ElMessage("地圖不對！");
-          await this.safeMove(getMapIdByName("大草原"));
-          ElMessage("移動！");
+    const targetMapId = getMapIdByName(this.setting.map);
+    const currentMapId = getMapIdByName(this.profile.zoneName);
+    const floor = Number(this.profile.huntStage || 0);
 
+    if (targetMapId === 1001) {
+      // 草原秘徑
+      if (currentMapId === 1) {
+        // 大草原
+        if (floor === 16) {
+          ElMessage("[秘徑] 抵達大草原 16F，等待主控流程進入秘徑...");
+          return false;
+        } else if (floor > 16) {
+          ElMessage("層數超過！安全回城重試...");
+          await this.safeMove(0);
           return false;
         }
-
-      case "被詛咒的寺院":
-        //還沒到秘境
-        if (this.profile.zoneName == "猛牛原") {
-          if (Number(this.profile.huntStage) == 18) {
-            let profile = await this.user.path(
-              getMapIdByName(this.setting.map)
-            );
-            this.setProfileInfo(profile);
-            ElMessage("進入秘境！");
-            return true;
-          } else if (Number(this.profile.huntStage) > 18) {
-            ElMessage("層數超過！");
-            await this.safeMove(0);
-            ElMessage("回城！");
-          }
-          return true;
-        } else {
-          ElMessage("地圖不對！");
-          await this.safeMove(getMapIdByName("猛牛原"));
-          ElMessage("移動！");
-
-          return false;
-        }
-
-      default:
+        return true;
+      } else {
+        ElMessage("地圖不對，前往大草原爬樓！");
+        await this.safeMove(1);
         return false;
+      }
     }
+
+    if (targetMapId === 2001) {
+      // 被詛咒的寺院
+      if (currentMapId === 2) {
+        // 猛牛園
+        if (floor === 18) {
+          ElMessage("[秘徑] 抵達猛牛園 18F，等待主控流程進入秘徑...");
+          return false;
+        } else if (floor > 18) {
+          ElMessage("層數超過！安全回城重試...");
+          await this.safeMove(0);
+          return false;
+        }
+        return true;
+      } else {
+        ElMessage("地圖不對，前往猛牛園爬樓！");
+        await this.safeMove(2);
+        return false;
+      }
+    }
+
+    if (targetMapId === 4001) {
+      // 菇菇仙境
+      if (currentMapId === 4) {
+        // 蘑菇園
+        if (floor === 12) {
+          ElMessage("[秘徑] 抵達蘑菇園 12F，等待主控流程進入秘徑...");
+          return false;
+        } else if (floor > 12) {
+          ElMessage("層數超過！安全回城重試...");
+          await this.safeMove(0);
+          return false;
+        }
+        return true;
+      } else {
+        ElMessage("地圖不對，前往蘑菇園爬樓！");
+        await this.safeMove(4);
+        return false;
+      }
+    }
+
+    return false;
   };
 
   rest = async () => {

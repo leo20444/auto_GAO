@@ -201,49 +201,15 @@
             <el-descriptions-item label="允許空手">
               <el-switch v-model="setting.allowEmptyHanded" />
             </el-descriptions-item>
-            <el-descriptions-item label="自動進入秘境">
-              <el-switch v-model="setting.enterSecretRealmEnabled" />
+            <el-descriptions-item label="單人自動刷王">
+              <el-radio-group v-model="setting.bossSoloMode" size="small">
+                <el-radio-button label="none">不打王</el-radio-button>
+                <el-radio-button label="pass">路過打王</el-radio-button>
+                <el-radio-button label="wait">原地打王</el-radio-button>
+              </el-radio-group>
             </el-descriptions-item>
-            <el-descriptions-item label="自動休息模式">
-              <div style="display: flex; flex-direction: column; gap: 8px">
-                <el-switch
-                  v-model="setting.autoRest"
-                  active-text="啟用"
-                  inactive-text="停用"
-                  inline-prompt
-                />
-                <div
-                  v-if="setting.autoRest"
-                  style="
-                    display: flex;
-                    gap: 8px;
-                    align-items: center;
-                    margin-top: 4px;
-                  "
-                >
-                  <span style="font-size: 12px; color: #909399">目標比例:</span>
-                  <el-input-number
-                    v-model="setting.autoRestPercent"
-                    :min="1"
-                    :max="100"
-                    size="small"
-                    style="width: 80px"
-                  />
-                  <span style="font-size: 12px; color: #909399">%</span>
-
-                  <span
-                    style="font-size: 12px; color: #909399; margin-left: 8px"
-                    >休息秒數:</span
-                  >
-                  <el-input-number
-                    v-model="setting.autoRestSeconds"
-                    :min="0"
-                    size="small"
-                    style="width: 80px"
-                    placeholder="隨機"
-                  />
-                </div>
-              </div>
+            <el-descriptions-item label="啟用轉移水晶">
+              <el-switch v-model="setting.useTeleportCrystal" />
             </el-descriptions-item>
           </el-descriptions>
         </el-col>
@@ -460,7 +426,7 @@
             style="width: 100%"
           >
             <el-option
-              v-for="(item, index) in medicine"
+              v-for="(item, index) in hpMedicines"
               :key="index"
               :label="item.name"
               :value="item.id"
@@ -471,6 +437,35 @@
           <div class="input-label">每次使用數量</div>
           <el-input-number
             v-model="medicineSetting.medicineHpQuantity"
+            :min="1"
+            style="width: 100%"
+          />
+        </el-col>
+      </el-row>
+      <el-row :gutter="20" style="margin-top: 15px">
+        <el-col
+          :xs="24"
+          :sm="12"
+          style="margin-bottom: 10px; sm-margin-bottom: 0"
+        >
+          <div class="input-label">SP 補品</div>
+          <el-select
+            v-model="medicineSetting.medicineSpId"
+            placeholder="選擇補品"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="(item, index) in spMedicines"
+              :key="index"
+              :label="item.name"
+              :value="item.id"
+            />
+          </el-select>
+        </el-col>
+        <el-col :xs="24" :sm="12">
+          <div class="input-label">每次使用數量</div>
+          <el-input-number
+            v-model="medicineSetting.medicineSpQuantity"
             :min="1"
             style="width: 100%"
           />
@@ -636,9 +631,8 @@ const setting = ref({
   hpRecoveryMode: "rest",
   spRecoveryMode: "rest",
   allowEmptyHanded: false,
-  autoRest: false,
-  autoRestPercent: 90,
-  autoRestSeconds: 0,
+  bossSoloMode: "none",
+  useTeleportCrystal: false,
   enableLogs: true,
   enableTimeline: true,
   refreshMode: "auto",
@@ -703,8 +697,10 @@ watch(
       setting.value.hpRecoveryMode = newVal.setting.hpRecoveryMode || "rest";
       setting.value.spRecoveryMode = newVal.setting.spRecoveryMode || "rest";
       setting.value.allowEmptyHanded = newVal.setting.allowEmptyHanded ?? false;
-      setting.value.autoRest = newVal.setting.autoRest ?? false;
-      setting.value.autoRestSeconds = newVal.setting.autoRestSeconds ?? 0;
+      setting.value.bossSoloMode = newVal.setting.bossSoloMode ?? "none";
+      setting.value.useTeleportCrystal =
+        newVal.setting.useTeleportCrystal ?? false;
+      selectWeaponList.value = newVal.selectedWeaponQueue || [];
       setting.value.partyMode = {
         enabled: newVal.setting.partyMode?.enabled ?? false,
         isLeader: newVal.setting.partyMode?.isLeader ?? false,
@@ -766,9 +762,8 @@ watch(
       battleAuto.setting.hpRecoveryMode = setting.value.hpRecoveryMode;
       battleAuto.setting.spRecoveryMode = setting.value.spRecoveryMode;
       battleAuto.setting.allowEmptyHanded = setting.value.allowEmptyHanded;
-      battleAuto.setting.autoRest = setting.value.autoRest;
-      battleAuto.setting.autoRestPercent = setting.value.autoRestPercent;
-      battleAuto.setting.autoRestSeconds = setting.value.autoRestSeconds;
+      battleAuto.setting.bossSoloMode = setting.value.bossSoloMode;
+      battleAuto.setting.useTeleportCrystal = setting.value.useTeleportCrystal;
       battleAuto.setting.enableLogs = setting.value.enableLogs;
       battleAuto.setting.enableTimeline = setting.value.enableTimeline;
       battleAuto.setting.refreshMode = setting.value.refreshMode;
@@ -802,9 +797,34 @@ watch(
   { deep: true }
 );
 
-const medicine = computed(() => {
+const hpMedicines = computed(() => {
   return items.value.items
-    .filter((item: any) => item.type === "consumable")
+    .filter((item: any) => {
+      const effect = item.effect;
+      if (!effect) return false;
+      const effectType = effect.type;
+      // 只允許 HP 恢復類道具
+      if (effectType === "hp") return true;
+      if (effectType === "restore" && (effect.hp ?? 0) > 0) return true;
+      return false;
+    })
+    .map((item: any) => ({
+      name: `${item.name} (${item.quantity})`,
+      id: item.item_id,
+    }));
+});
+
+const spMedicines = computed(() => {
+  return items.value.items
+    .filter((item: any) => {
+      const effect = item.effect;
+      if (!effect) return false;
+      const effectType = effect.type;
+      // 只允許 MP/SP 恢復類道具
+      if (effectType === "mp") return true;
+      if (effectType === "restore" && (effect.mp ?? 0) > 0) return true;
+      return false;
+    })
     .map((item: any) => ({
       name: `${item.name} (${item.quantity})`,
       id: item.item_id,

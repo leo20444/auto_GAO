@@ -772,6 +772,99 @@ function user(inputToken) {
       return false;
     }
   };
+
+  this.fightBoss = async function () {
+    try {
+      const res = await axios.post(
+        `${baseurl}/tower/boss`,
+        {},
+        { headers: getHeaders() }
+      );
+      const profile = await this.getProfile();
+      return { data: res.data, profile };
+    } catch (error) {
+      console.error("fightBoss error:", error);
+      return {
+        error: true,
+        message: error.response?.data?.message || error.message,
+      };
+    }
+  };
+
+  this.buyShopItem = async function (shopItemId, quantity = 1) {
+    try {
+      const res = await axios.post(
+        `${baseurl}/town/shop/buy`,
+        { shopItemId, quantity },
+        { headers: getHeaders() }
+      );
+      return res.data;
+    } catch (error) {
+      console.error("buyShopItem error:", error);
+      return {
+        error: true,
+        message: error.response?.data?.message || error.message,
+      };
+    }
+  };
+
+  this.useTeleportCrystal = async function () {
+    try {
+      const res = await axios.post(
+        `${baseurl}/inventory/use/173`,
+        { fillToFull: true },
+        { headers: getHeaders() }
+      );
+      return res.data;
+    } catch (error) {
+      console.error("useTeleportCrystal error:", error);
+      return {
+        error: true,
+        message: error.response?.data?.message || error.message,
+      };
+    }
+  };
+
+  this.collectLottery = async function () {
+    try {
+      const res = await axios.post(
+        `${baseurl}/town/lottery/collect`,
+        {},
+        { headers: getHeaders() }
+      );
+      return res.data;
+    } catch (error) {
+      try {
+        const res = await axios.get(`${baseurl}/town/lottery/collect`, {
+          headers: getHeaders(),
+        });
+        return res.data;
+      } catch (getErr) {
+        console.error("collectLottery error:", getErr);
+        return {
+          error: true,
+          message: getErr.response?.data?.message || getErr.message,
+        };
+      }
+    }
+  };
+
+  this.buyLottery = async function () {
+    try {
+      const res = await axios.post(
+        `${baseurl}/town/lottery/buy`,
+        {},
+        { headers: getHeaders() }
+      );
+      return res.data;
+    } catch (error) {
+      console.error("buyLottery error:", error);
+      return {
+        error: true,
+        message: error.response?.data?.message || error.message,
+      };
+    }
+  };
 }
 
 export default user;

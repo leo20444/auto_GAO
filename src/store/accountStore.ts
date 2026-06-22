@@ -2,6 +2,15 @@ import { reactive, ref, watch, computed } from "vue";
 import user from "../api/user.js";
 import { ElMessage } from "element-plus";
 import moment from "moment";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore
+import map from "../common/mapping";
+
+function getMapIdByName(name: string): number | null {
+  if (!name) return null;
+  const found = map.find((item: any) => item.name === name);
+  return found ? found.id : null;
+}
 
 function isRateLimitError(error: any): boolean {
   if (!error) return false;
@@ -44,9 +53,11 @@ export interface Account {
         autoRestPercent: number;
         autoRestSeconds: number;
         battleMode?: string;
+        bossSoloMode?: "none" | "pass" | "wait";
+        useTeleportCrystal?: boolean;
+        refreshMode?: string;
         enableLogs?: boolean;
         enableTimeline?: boolean;
-        refreshMode?: string;
         enterSecretRealmEnabled?: boolean;
         partyMode?: {
           enabled: boolean;
@@ -101,7 +112,13 @@ export interface Account {
         duration: number;
       };
     };
+    lottery?: {
+      lastCollectedAt: string;
+      lastBoughtAt: string;
+      lastBoughtSessionId: number;
+    };
   };
+  lotteryProgressState?: string;
   party: any;
   tower: any;
   items: {
@@ -139,12 +156,14 @@ watch(
           medicineCheckTag: acc.automation.battle.medicineCheckTag,
         },
         medicineSetting: acc.automation.battle.medicineSetting,
+        selectedWeaponQueue: acc.automation.battle.selectedWeaponQueue || [],
         forgeWeaponPayload: acc.automation.forge.weaponPayload,
         forgeSetting: acc.automation.forge.setting,
         miningSetting: {
           zone: acc.automation.mining.setting?.zone ?? "forest",
           duration: acc.automation.mining.setting?.duration ?? 15,
         },
+        lottery: acc.automation.lottery,
       };
       localStorage.setItem(`setting_${acc.token}`, JSON.stringify(userSetting));
     });
@@ -159,24 +178,29 @@ async function refreshAccountState(acc: Account, forceAll = false) {
       safeUpdateProfile(acc, profile);
       if (profile.towerStatus) {
         acc.tower = profile.towerStatus;
+        // 同步伺服器端秘徑狀態至本地 profile 內
+        acc.profile.inSecretRealm = !!profile.towerStatus.inSecretRealm;
       }
     }
-    // 離開地圖自動解除秘境鎖定
+    // 離開地圖或樓層不符時自動解除秘徑鎖定
     if (acc.profile && acc.profile.inSecretRealm === true) {
       const currentMap = acc.profile.zoneName;
-      if (
-        currentMap !== "大草原" &&
-        currentMap !== "great_plains" &&
-        currentMap !== "猛牛園" &&
-        currentMap !== "bull_pen" &&
-        currentMap !== "蘑菇園" &&
-        currentMap !== "mushroom_garden"
-      ) {
+      const floor = acc.profile.huntStage || 0;
+      const secretRealmConfig: Record<string, number> = {
+        大草原: 16,
+        great_plains: 16,
+        猛牛園: 18,
+        bull_pen: 18,
+        蘑菇園: 12,
+        mushroom_garden: 12,
+      };
+      const isSecretFloor = secretRealmConfig[currentMap] === floor;
+      if (!isSecretFloor) {
         acc.profile.inSecretRealm = false;
         addLog(
           acc,
           "battle",
-          "[秘境] 偵測到已離開秘境地圖，自動重設秘境鎖定狀態。"
+          "[秘徑] 偵測到已離開秘徑地圖或樓層，自動重設秘徑鎖定狀態。"
         );
       }
     }
@@ -265,9 +289,15 @@ function addAccount(token: string) {
           autoRestPercent: savedSetting.setting?.autoRestPercent ?? 90,
           autoRestSeconds: savedSetting.setting?.autoRestSeconds ?? 0,
           battleMode: savedSetting.setting?.battleMode ?? "battle",
+          bossSoloMode:
+            savedSetting.setting?.bossSoloMode ??
+            (savedSetting.setting?.autoChallengeBossSolo === true
+              ? "wait"
+              : "none"),
+          useTeleportCrystal: savedSetting.setting?.useTeleportCrystal ?? false,
+          refreshMode: savedSetting.setting?.refreshMode ?? "auto",
           enableLogs: savedSetting.setting?.enableLogs ?? true,
           enableTimeline: savedSetting.setting?.enableTimeline ?? true,
-          refreshMode: savedSetting.setting?.refreshMode ?? "auto",
           enterSecretRealmEnabled:
             savedSetting.setting?.enterSecretRealmEnabled ?? false,
           partyMode: {
@@ -290,7 +320,7 @@ function addAccount(token: string) {
         weaponCheckTag: savedSetting.setting?.weaponCheckTag ?? true,
         armorCheckTag: savedSetting.setting?.armorCheckTag ?? false,
         medicineCheckTag: savedSetting.setting?.medicineCheckTag ?? false,
-        selectedWeaponQueue: [],
+        selectedWeaponQueue: savedSetting.selectedWeaponQueue ?? [],
         medicineSetting: {
           medicineHpId: savedSetting.medicineSetting?.medicineHpId ?? "",
           medicineSpId: savedSetting.medicineSetting?.medicineSpId ?? "",
@@ -325,6 +355,11 @@ function addAccount(token: string) {
           zone: savedSetting.miningSetting?.zone ?? "forest",
           duration: savedSetting.miningSetting?.duration ?? 15,
         },
+      },
+      lottery: {
+        lastCollectedAt: savedSetting.lottery?.lastCollectedAt ?? "",
+        lastBoughtAt: savedSetting.lottery?.lastBoughtAt ?? "",
+        lastBoughtSessionId: savedSetting.lottery?.lastBoughtSessionId ?? 0,
       },
     },
   });
@@ -602,24 +637,24 @@ async function startBattle(token: string) {
                 addLog(
                   acc,
                   "battle",
-                  `[秘境] 隊員抵達 ${targetFloor}F，自動發送進入秘境請求...`
+                  `[秘徑] 隊員抵達 ${targetFloor}F，自動發送進入秘徑請求...`
                 );
                 try {
                   const enterRes = await acc.userObj.enterSecretRealm();
                   if (enterRes && !enterRes.error) {
                     acc.profile.inSecretRealm = true;
-                    addLog(acc, "battle", `[秘境] 隊員進入秘境成功！`);
+                    addLog(acc, "battle", `[秘徑] 隊員進入秘徑成功！`);
                   } else {
                     addLog(
                       acc,
                       "battle",
-                      `[秘境] 隊員進入秘境失敗: ${
+                      `[秘徑] 隊員進入秘徑失敗: ${
                         enterRes?.message || "未知錯誤"
                       }`
                     );
                   }
                 } catch (e) {
-                  console.error(`[隊員進入秘境] 失敗:`, e);
+                  console.error(`[隊員進入秘徑] 失敗:`, e);
                 }
               }
             }
@@ -672,23 +707,23 @@ async function startBattle(token: string) {
               const isParty = pMode && pMode.enabled;
 
               if (!isParty) {
-                // A. 個人模式：直接自動進入秘境
+                // A. 個人模式：直接自動進入秘徑
                 if (acc.profile.inSecretRealm !== true) {
                   addLog(
                     acc,
                     "battle",
-                    `[秘境] 抵達 ${targetFloor}F 秘境層，自動發送進入秘境請求...`
+                    `[秘徑] 抵達 ${targetFloor}F 秘徑層，自動發送進入秘徑請求...`
                   );
                   const enterRes = await acc.userObj.enterSecretRealm();
                   if (enterRes && !enterRes.error) {
                     acc.profile.inSecretRealm = true;
-                    addLog(acc, "battle", `[秘境] 成功進入秘境！`);
+                    addLog(acc, "battle", `[秘徑] 成功進入秘徑！`);
                     proceedWithBattle = false; // 本輪先不進行戰鬥，等下輪
                   } else {
                     addLog(
                       acc,
                       "battle",
-                      `[秘境] 進入秘境失敗: ${
+                      `[秘徑] 進入秘徑失敗: ${
                         enterRes?.message || "未知錯誤"
                       }，將於下輪重試...`
                     );
@@ -750,29 +785,29 @@ async function startBattle(token: string) {
                     addLog(
                       acc,
                       "battle",
-                      `[秘境等待] 隊長在 ${targetFloor}F 等待同在該層的我方隊友進入秘境: ${waitingMemberNames.join(
+                      `[秘徑等待] 隊長在 ${targetFloor}F 等待同在該層的我方隊友進入秘徑: ${waitingMemberNames.join(
                         ", "
                       )}...`
                     );
                     proceedWithBattle = false;
                   } else {
-                    // 我方託管隊友皆已進入秘境，隊長自己進入秘境
+                    // 我方託管隊友皆已進入秘徑，隊長自己進入秘徑
                     if (acc.profile.inSecretRealm !== true) {
                       addLog(
                         acc,
                         "battle",
-                        `[秘境] 託管隊友已全數進入，隊長殿後進入秘境！`
+                        `[秘徑] 託管隊友已全數進入，隊長殿後進入秘徑！`
                       );
                       const enterRes = await acc.userObj.enterSecretRealm();
                       if (enterRes && !enterRes.error) {
                         acc.profile.inSecretRealm = true;
-                        addLog(acc, "battle", `[秘境] 隊長成功進入秘境！`);
+                        addLog(acc, "battle", `[秘徑] 隊長成功進入秘徑！`);
                         proceedWithBattle = false; // 本輪進完先不戰鬥
                       } else {
                         addLog(
                           acc,
                           "battle",
-                          `[秘境] 隊長進入秘境失敗: ${
+                          `[秘徑] 隊長進入秘徑失敗: ${
                             enterRes?.message || "未知錯誤"
                           }，下輪重試...`
                         );
@@ -804,7 +839,7 @@ async function startBattle(token: string) {
                               addLog(
                                 acc,
                                 "battle",
-                                `[秘境等待] 隊外成員 ${member.character_name} 仍處於 ${targetFloor}F，等待其就緒...`
+                                `[秘徑等待] 隊外成員 ${member.character_name} 仍處於 ${targetFloor}F，等待其就緒...`
                               );
                             }
                           }
@@ -1240,10 +1275,100 @@ async function startBattle(token: string) {
             if (proceedWithBattle) {
               acc.automation.battle.timeline = null; // 每次發起戰鬥前先清空 Timeline
               const isParty = acc.automation.battle.setting.partyMode?.enabled;
+              const currentMapId = getMapIdByName(acc.profile.zoneName);
+              const currentStage = acc.profile.huntStage || 0;
+
+              const bossFloors: Record<number, number> = {
+                1: 30, // 大草原 30F
+                2: 25, // 猛牛原/猛牛園 25F
+                3: 18, // 兒童樂園 18F
+                4: 24, // 蘑菇園 24F
+                5: 20, // 圓明園 20F
+              };
+
+              const isSoloBossFloor =
+                !isParty &&
+                currentMapId !== null &&
+                bossFloors[currentMapId] === currentStage;
+
+              if (isSoloBossFloor) {
+                const bossMode =
+                  acc.automation.battle.setting.bossSoloMode || "none";
+                if (bossMode === "none") {
+                  addLog(
+                    acc,
+                    "battle",
+                    `[王關掛網] 已設定不打王，直接進行普通狩獵/爬樓。`
+                  );
+                } else {
+                  const cooldownEnds = acc.tower?.bossCooldownEndsAt;
+                  const nowMs = Date.now();
+                  const isCd =
+                    cooldownEnds && new Date(cooldownEnds).getTime() > nowMs;
+
+                  if (isCd) {
+                    if (bossMode === "wait") {
+                      const cdTime = new Date(cooldownEnds).getTime();
+                      const secondsLeft = Math.ceil((cdTime - nowMs) / 1000);
+                      addLog(
+                        acc,
+                        "battle",
+                        `[刷王等待] 已抵達王關 (${currentStage}F)，BOSS 冷卻中，剩餘等待時間: ${secondsLeft} 秒...`
+                      );
+                      await sleep(11000);
+                      continue;
+                    } else {
+                      addLog(
+                        acc,
+                        "battle",
+                        `[王關路過] BOSS 冷卻中，且設定為路過打王，不停留直接狩獵。`
+                      );
+                    }
+                  } else {
+                    addLog(
+                      acc,
+                      "battle",
+                      `[挑戰BOSS] BOSS 冷卻完畢，發起挑戰王 API...`
+                    );
+                    const bossRes = await acc.userObj.fightBoss();
+                    if (bossRes) {
+                      if (bossRes.error) {
+                        addLog(
+                          acc,
+                          "battle",
+                          `[挑戰BOSS失敗] 原因: ${
+                            bossRes.message || "未知錯誤"
+                          }`
+                        );
+                      } else {
+                        const fightData = bossRes.data || {};
+                        safeUpdateProfile(
+                          acc,
+                          bossRes.profile || fightData.profile
+                        );
+                        if (bossRes.profile?.towerStatus) {
+                          acc.tower = bossRes.profile.towerStatus;
+                        }
+                        let logMsg = `[挑戰BOSS成功] 結果: ${
+                          fightData.winner || "未知"
+                        }, 獲得經驗: ${fightData.exp || 0}, 金幣: ${
+                          fightData.gold || 0
+                        }`;
+                        if (fightData.advance) {
+                          if (fightData.advance.died) logMsg += ` [玩家死亡]`;
+                        }
+                        addLog(acc, "battle", logMsg);
+                      }
+                    }
+                    await sleep(11000);
+                    continue;
+                  }
+                }
+              }
+
               const runLevel = isParty
                 ? acc.automation.battle.setting.partyMode?.runLevel || 0
                 : acc.automation.battle.setting.runLevel || 0;
-              const currentStage = acc.profile.huntStage || 0;
               const enableTimeline =
                 acc.automation.battle.setting.enableTimeline !== false;
 
@@ -1269,15 +1394,6 @@ async function startBattle(token: string) {
                     if (runRes.advance.died) {
                       logMsg += ` [玩家死亡]`;
                     }
-                    if (
-                      runRes.advance.itemDrops &&
-                      runRes.advance.itemDrops.length > 0
-                    ) {
-                      const drops = runRes.advance.itemDrops
-                        .map((d: any) => `${d.name} x${d.quantity}`)
-                        .join(", ");
-                      logMsg += `，掉落: ${drops}`;
-                    }
                   }
                   addLog(acc, "battle", logMsg);
                 }
@@ -1298,15 +1414,6 @@ async function startBattle(token: string) {
                   if (huntRes.advance) {
                     if (huntRes.advance.died) {
                       logMsg += ` [玩家死亡]`;
-                    }
-                    if (
-                      huntRes.advance.itemDrops &&
-                      huntRes.advance.itemDrops.length > 0
-                    ) {
-                      const drops = huntRes.advance.itemDrops
-                        .map((d: any) => `${d.name} x${d.quantity}`)
-                        .join(", ");
-                      logMsg += `，掉落: ${drops}`;
                     }
                   }
                   addLog(acc, "battle", logMsg);
@@ -1674,7 +1781,7 @@ function stopMining(token: string) {
 async function refreshAccount(token: string) {
   const acc = accounts.find((a) => a.token === token);
   if (acc) {
-    await refreshAccountState(acc);
+    await refreshAccountState(acc, true);
   }
 }
 
@@ -1708,6 +1815,135 @@ const selectedAccount = computed(() => {
   return accounts[selectedAccountIndex.value];
 });
 
+function isLotteryReset(lastTimeStr: string) {
+  if (!lastTimeStr) return true;
+  const lastTime = new Date(lastTimeStr);
+  const now = new Date();
+
+  const lastOffset = new Date(lastTime.getTime() - 8 * 60 * 60 * 1000);
+  const nowOffset = new Date(now.getTime() - 8 * 60 * 60 * 1000);
+
+  const lastDate = `${lastOffset.getFullYear()}-${
+    lastOffset.getMonth() + 1
+  }-${lastOffset.getDate()}`;
+  const nowDate = `${nowOffset.getFullYear()}-${
+    nowOffset.getMonth() + 1
+  }-${nowOffset.getDate()}`;
+
+  return lastDate !== nowDate;
+}
+
+function collectConfigUpdate(acc: Account, type: "collect" | "buy") {
+  if (!acc.automation.lottery) {
+    acc.automation.lottery = {
+      lastCollectedAt: "",
+      lastBoughtAt: "",
+      lastBoughtSessionId: 0,
+    };
+  }
+  if (type === "collect") {
+    acc.automation.lottery.lastCollectedAt = new Date().toISOString();
+  } else {
+    acc.automation.lottery.lastBoughtAt = new Date().toISOString();
+  }
+}
+
+async function oneClickLotteryAll() {
+  const activeAccs = accounts.filter((acc) => acc.isActive);
+  let successCount = 0;
+  let failCount = 0;
+
+  for (const acc of activeAccs) {
+    if (!acc.automation.lottery) {
+      acc.automation.lottery = {
+        lastCollectedAt: "",
+        lastBoughtAt: "",
+        lastBoughtSessionId: 0,
+      };
+    }
+    const lotteryConfig = acc.automation.lottery;
+    const isCollectReset = isLotteryReset(lotteryConfig.lastCollectedAt);
+    const isBuyReset = isLotteryReset(lotteryConfig.lastBoughtAt);
+
+    // 如果今日都已處理，則直接算成功並跳過
+    if (!isCollectReset && !isBuyReset) {
+      acc.lotteryProgressState = undefined;
+      successCount++;
+      continue;
+    }
+
+    acc.lotteryProgressState = "處理中";
+    addLog(acc, "battle", "[一鍵樂透] 開始處理今日樂透...");
+
+    let collectSuccess = !isCollectReset;
+    let buySuccess = !isBuyReset;
+
+    try {
+      if (isCollectReset) {
+        addLog(acc, "battle", "[一鍵樂透] 正在領取樂透每日獎金...");
+        const collectRes = await acc.userObj.collectLottery();
+        if (collectRes && !collectRes.error) {
+          collectConfigUpdate(acc, "collect");
+          collectSuccess = true;
+          addLog(acc, "battle", `[一鍵樂透] 領取成功！`);
+        } else {
+          // 失敗代表已領取過，直接更新時間戳記並視為成功
+          collectConfigUpdate(acc, "collect");
+          collectSuccess = true;
+          addLog(
+            acc,
+            "battle",
+            `[一鍵樂透] 領取回傳失敗，視為已領取過。錯誤訊息: ${
+              collectRes?.message || "未知錯誤"
+            }`
+          );
+        }
+        await sleep(600);
+      }
+
+      if (isBuyReset) {
+        addLog(acc, "battle", "[一鍵樂透] 正在購買本期樂透...");
+        const buyRes = await acc.userObj.buyLottery();
+        if (buyRes && !buyRes.error) {
+          collectConfigUpdate(acc, "buy");
+          buySuccess = true;
+          addLog(acc, "battle", `[一鍵樂透] 購買成功！`);
+        } else {
+          // 失敗代表已購買過，直接更新時間戳記並視為成功
+          collectConfigUpdate(acc, "buy");
+          buySuccess = true;
+          addLog(
+            acc,
+            "battle",
+            `[一鍵樂透] 購買回傳失敗，視為已購買過。錯誤訊息: ${
+              buyRes?.message || "未知錯誤"
+            }`
+          );
+        }
+        await sleep(600);
+      }
+
+      if (collectSuccess && buySuccess) {
+        acc.lotteryProgressState = undefined;
+        successCount++;
+      } else {
+        acc.lotteryProgressState = "失敗";
+        failCount++;
+      }
+
+      // 刷新帳號金幣等狀態
+      await refreshAccountState(acc, true);
+    } catch (e: any) {
+      console.error("[一鍵樂透] 異常:", e);
+      addLog(acc, "battle", `[一鍵樂透] 異常: ${e.message || e}`);
+      acc.lotteryProgressState = "失敗";
+      failCount++;
+    }
+  }
+
+  return { successCount, failCount };
+}
+
 export const useAccountStore = () => ({
   accounts,
   selectedAccountIndex,
@@ -1724,4 +1960,5 @@ export const useAccountStore = () => ({
   stopMining,
   refreshAccount,
   refreshAccountState,
+  oneClickLotteryAll,
 });

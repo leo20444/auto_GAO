@@ -19,148 +19,46 @@ class statusCheck {
 
     switch (this.profile.actionStatus) {
       case "休息": {
-        if (this.setting?.autoRest) {
-          const pMode = this.setting?.partyMode;
-          if (pMode && pMode.enabled && !pMode.isLeader) {
-            // 隊員不主動停止休息，等待隊長統一停止
-            console.log(
-              `[狀態檢查-自動休息] ${this.profile.name} 是隊員，等待隊長停止休息...`
-            );
-            return false;
-          }
+        const elapsedSec = this.actionTimeSeconds();
+        const targetSeconds = 10; // 固定為 10 秒
 
-          let targetSeconds = Number(this.setting.autoRestSeconds || 0);
-          if (targetSeconds <= 0) {
-            const seed = moment(this.profile.actionStart).valueOf();
-            targetSeconds = 20 + (seed % 21);
-          }
-
-          const elapsedSec = this.actionTimeSeconds();
-          console.log(
-            `[狀態檢查-自動休息] ${this.profile.name} 已進行 ${Math.floor(
-              elapsedSec
-            )} 秒 / 目標 ${targetSeconds} 秒`
-          );
-
-          if (elapsedSec >= targetSeconds) {
-            const hpPercent = (this.profile.hp / this.profile.fullHp) * 100;
-            const mpPercent = (this.profile.sp / this.profile.fullSp) * 100;
-            const targetPercent = Number(this.setting.autoRestPercent ?? 90);
-
-            // 檢查組隊模式下成員是否就緒
-            let partyMembersReady = true;
-            if (pMode && pMode.enabled && pMode.isLeader) {
-              try {
-                const partyStatus = await this.user.getPartyStatus();
-                if (
-                  partyStatus &&
-                  partyStatus.party &&
-                  partyStatus.party.members
-                ) {
-                  const members = partyStatus.party.members;
-                  for (const member of members) {
-                    const isSelf =
-                      (this.profile.id &&
-                        Number(member.user_id) === Number(this.profile.id)) ||
-                      (this.profile.userId &&
-                        Number(member.user_id) ===
-                          Number(this.profile.userId)) ||
-                      (this.profile.user_id &&
-                        Number(member.user_id) ===
-                          Number(this.profile.user_id));
-
-                    if (isSelf) continue;
-
-                    const memberHpPercent = member.max_hp
-                      ? (member.hp / member.max_hp) * 100
-                      : 100;
-                    const memberMpPercent = member.max_mp
-                      ? (member.mp / member.max_mp) * 100
-                      : 100;
-
-                    if (
-                      memberHpPercent < targetPercent ||
-                      memberMpPercent < targetPercent
-                    ) {
-                      console.log(
-                        `[狀態檢查-自動休息評估] 隊員 ${
-                          member.character_name
-                        } 尚未就緒 (HP: ${Math.round(
-                          memberHpPercent
-                        )}%, SP: ${Math.round(
-                          memberMpPercent
-                        )}%)，隊長繼續休息...`
-                      );
-                      partyMembersReady = false;
-                      break;
-                    }
-                  }
-                }
-              } catch (e) {
-                console.error("[狀態檢查-自動休息評估] 獲取隊伍狀態失敗:", e);
-              }
-            }
-
-            const isHpAboveThreshold = this.profile.hp > (this.setting.hp || 0);
-            const isSpAboveThreshold = this.profile.sp > (this.setting.sp || 0);
-
-            if (
-              hpPercent >= targetPercent &&
-              mpPercent >= targetPercent &&
-              isHpAboveThreshold &&
-              isSpAboveThreshold &&
-              partyMembersReady
-            ) {
-              ElMessage(
-                `已休息 ${Math.floor(
-                  elapsedSec
-                )} 秒 (目標 ${targetSeconds} 秒)，且狀態已達標。停止休息！`
-              );
-              let profile = await this.user.restComplete();
-              if (profile) {
-                this.profile = profile;
-                await this.setProfileInfo(profile);
-              }
-              return true;
-            } else {
-              console.log(
-                `[狀態檢查-自動休息評估] 狀態未達標，繼續在伺服器休息... (HP: ${Math.round(
-                  hpPercent
-                )}% / 門檻: ${this.setting.hp} HP, SP: ${Math.round(
-                  mpPercent
-                )}% / 門檻: ${
-                  this.setting.sp
-                } SP, 隊員就緒: ${partyMembersReady})`
-              );
-              return false;
-            }
-          }
-          ElMessage(
-            `休息中，已進行 ${Math.floor(
-              elapsedSec
-            )} 秒 / 目標 ${targetSeconds} 秒`
-          );
-          return false;
-        }
-
-        const reqDuration = this.setting?.restDuration ?? 10;
-        const elapsedMin = this.actionTime();
         console.log(
-          `[狀態檢查-普通休息] ${this.profile.name} 已進行 ${elapsedMin} 分 / 目標 ${reqDuration} 分`
+          `[狀態檢查-休息] ${this.profile.name} 已進行 ${Math.floor(
+            elapsedSec
+          )} 秒 / 目標 ${targetSeconds} 秒`
         );
 
-        if (elapsedMin >= reqDuration) {
+        if (elapsedSec >= targetSeconds) {
           let profile = await this.user.restComplete();
           if (profile) {
             this.profile = profile;
             await this.setProfileInfo(profile);
-            ElMessage("休息完成！");
+            ElMessage("休息時間到！確認醒來。");
           }
-          if (this.profile.sp < this.profile.fullSp) {
-            ElMessage("體力沒滿繼續睡");
-            this.rest();
+
+          // 醒來後檢查是否仍低於安全門檻 (極限保護設定) 且模式為休息
+          const hpLimit = this.setting?.hp || 0;
+          const spLimit = this.setting?.sp || 0;
+          const hpMode = this.setting?.hpRecoveryMode || "rest";
+          const spMode = this.setting?.spRecoveryMode || "rest";
+
+          const needHpRest =
+            this.profile.hp < this.profile.fullHp &&
+            this.profile.hp <= hpLimit &&
+            hpMode === "rest";
+          const needSpRest =
+            this.profile.sp < this.profile.fullSp &&
+            this.profile.sp <= spLimit &&
+            spMode === "rest";
+
+          if (needHpRest || needSpRest) {
+            ElMessage(
+              "狀態仍低於保護門檻且為休息模式，繼續進行下一輪 10 秒休息..."
+            );
+            await this.rest();
             return false;
           } else {
+            ElMessage("狀態已高於保護門檻，可以出發！");
             return true;
           }
         }

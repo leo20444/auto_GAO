@@ -417,6 +417,17 @@ const displayMaterialsList = computed(() => {
     }
   });
 
+  // 3. 排序：已選用數量 > 0 的項目優先置頂，其次依背包持有量降序排列
+  list.sort((a, b) => {
+    const qtyA = selectedMaterials.value[a.item_id] || 0;
+    const qtyB = selectedMaterials.value[b.item_id] || 0;
+
+    if (qtyA > 0 && qtyB === 0) return -1;
+    if (qtyA === 0 && qtyB > 0) return 1;
+
+    return b.quantity - a.quantity;
+  });
+
   return list;
 });
 
@@ -432,6 +443,7 @@ const filteredMaterials = computed(() => {
 
 // 防止 store→local 和 local→store 互相觸發的防護 flag
 const isUpdatingFromStore = ref(false);
+const isInitialized = ref(false);
 
 // 本地可變響應式變數，與 UI 輸入進行雙向綁定
 const weapon_name = ref("");
@@ -564,6 +576,7 @@ watch(
   () => props.userObj?.token,
   (newToken) => {
     if (newToken) {
+      isInitialized.value = false; // 帳號更換，重設初始化標記
       fetchRecipesAndMaterials();
       activeFavoriteId.value = "";
       loadFavorites();
@@ -602,6 +615,7 @@ watch(
 
       setTimeout(() => {
         isUpdatingFromStore.value = false;
+        isInitialized.value = true; // 狀態同步完成，啟動初始化鎖
       }, 0);
     }
   },
@@ -627,7 +641,7 @@ watch(
 watch(
   [weapon_name, result_item_id, selectedMaterials, loopCraft, maxCraftCount],
   () => {
-    if (isUpdatingFromStore.value) return;
+    if (isUpdatingFromStore.value || !isInitialized.value) return;
     if (account.value) {
       const forge = account.value.automation.forge;
       forge.weaponPayload.weapon_name = weapon_name.value;
