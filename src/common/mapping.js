@@ -18,4 +18,11 @@ const map = [
   { name: "老鼠洞", id: 13 },
 ];
 
+// 秘徑設定對照表
+export const secretRealmConfig = {
+  1001: { parentId: 1, enterFloor: 16, parentName: "大草原" },
+  2001: { parentId: 2, enterFloor: 18, parentName: "猛牛園" },
+  4001: { parentId: 4, enterFloor: 12, parentName: "蘑菇園" },
+};
+
 export default map;

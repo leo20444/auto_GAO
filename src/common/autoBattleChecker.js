@@ -1,4 +1,4 @@
-import map from "../common/mapping";
+import map, { secretRealmConfig } from "../common/mapping";
 const ElMessage = (msg) => console.log("[自動化訊息]", msg);
 ElMessage.success = (msg) => console.log("[自動化成功]", msg);
 ElMessage.warning = (msg) => console.warn("[自動化警告]", msg);
@@ -452,67 +452,35 @@ class autoBattleChecker {
     const currentMapId = getMapIdByName(this.profile.zoneName);
     const floor = Number(this.profile.huntStage || 0);
 
-    if (targetMapId === 1001) {
-      // 草原秘徑
-      if (currentMapId === 1) {
-        // 大草原
-        if (floor === 16) {
-          ElMessage("[秘徑] 抵達大草原 16F，等待主控流程進入秘徑...");
-          return false;
-        } else if (floor > 16) {
-          ElMessage("層數超過！安全回城重試...");
-          await this.safeMove(0);
-          return false;
-        }
-        return true;
-      } else {
-        ElMessage("地圖不對，前往大草原爬樓！");
-        await this.safeMove(1);
-        return false;
-      }
+    const config = secretRealmConfig[targetMapId];
+    if (!config) return false;
+
+    // 1. 如果角色目前不在母地圖上
+    if (currentMapId !== config.parentId) {
+      ElMessage(`地圖不對，前往${config.parentName}爬樓！`);
+      await this.safeMove(config.parentId);
+      return false;
     }
 
-    if (targetMapId === 2001) {
-      // 被詛咒的寺院
-      if (currentMapId === 2) {
-        // 猛牛園
-        if (floor === 18) {
-          ElMessage("[秘徑] 抵達猛牛園 18F，等待主控流程進入秘徑...");
-          return false;
-        } else if (floor > 18) {
-          ElMessage("層數超過！安全回城重試...");
-          await this.safeMove(0);
-          return false;
-        }
-        return true;
-      } else {
-        ElMessage("地圖不對，前往猛牛園爬樓！");
-        await this.safeMove(2);
-        return false;
-      }
+    // 2. 🌟 秘徑狀態鎖：若已身處秘徑，直接視為已抵達，解鎖戰鬥！
+    if (this.profile.inSecretRealm) {
+      return true;
     }
 
-    if (targetMapId === 4001) {
-      // 菇菇仙境
-      if (currentMapId === 4) {
-        // 蘑菇園
-        if (floor === 12) {
-          ElMessage("[秘徑] 抵達蘑菇園 12F，等待主控流程進入秘徑...");
-          return false;
-        } else if (floor > 12) {
-          ElMessage("層數超過！安全回城重試...");
-          await this.safeMove(0);
-          return false;
-        }
-        return true;
-      } else {
-        ElMessage("地圖不對，前往蘑菇園爬樓！");
-        await this.safeMove(4);
-        return false;
-      }
+    // 3. 樓層入口檢查
+    if (floor === config.enterFloor) {
+      ElMessage(
+        `[秘徑] 抵達${config.parentName} ${config.enterFloor}F，等待主控流程進入秘徑...`
+      );
+      return false;
+    } else if (floor > config.enterFloor) {
+      ElMessage("層數超過！安全回城重試...");
+      await this.safeMove(0);
+      return false;
     }
 
-    return false;
+    // 4. 1F 到 (enterFloor - 1)F 之間，正常趕路爬樓中
+    return true;
   };
 
   rest = async () => {

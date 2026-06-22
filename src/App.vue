@@ -1,5 +1,6 @@
 <script lang="ts" setup>
 import { ref, reactive, onMounted, onUnmounted, watch } from "vue";
+import { secretRealmConfig } from "./common/mapping";
 import { RouterView } from "vue-router";
 import { useAccountStore } from "./store/accountStore";
 import { ElMessageBox, ElMessage } from "element-plus";
@@ -220,17 +221,24 @@ const getMinArmorDurability = (armors: any[]) => {
 };
 
 const isAtSecretRealmFloor = (acc: any) => {
-  const secretRealmConfig: Record<string, number> = {
-    大草原: 16,
-    great_plains: 16,
-    猛牛園: 18,
-    bull_pen: 18,
-    蘑菇園: 12,
-    mushroom_garden: 12,
-  };
   const zoneName = acc.profile?.zoneName;
   const huntStage = acc.profile?.huntStage;
-  return zoneName && huntStage && secretRealmConfig[zoneName] === huntStage;
+  if (!zoneName || !huntStage) return false;
+
+  if (zoneName === "大草原" || zoneName === "great_plains") {
+    return huntStage === secretRealmConfig[1001].enterFloor;
+  }
+  if (
+    zoneName === "猛牛園" ||
+    zoneName === "bull_pen" ||
+    zoneName === "bull_garden"
+  ) {
+    return huntStage === secretRealmConfig[2001].enterFloor;
+  }
+  if (zoneName === "蘑菇園" || zoneName === "mushroom_garden") {
+    return huntStage === secretRealmConfig[4001].enterFloor;
+  }
+  return false;
 };
 
 const isLotteryReset = (lastTimeStr: string) => {

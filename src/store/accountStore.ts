@@ -4,7 +4,7 @@ import { ElMessage } from "element-plus";
 import moment from "moment";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore
-import map from "../common/mapping";
+import map, { secretRealmConfig } from "../common/mapping";
 
 function getMapIdByName(name: string): number | null {
   if (!name) return null;
@@ -182,19 +182,18 @@ async function refreshAccountState(acc: Account, forceAll = false) {
         acc.profile.inSecretRealm = !!profile.towerStatus.inSecretRealm;
       }
     }
-    // 離開地圖或樓層不符時自動解除秘徑鎖定
     if (acc.profile && acc.profile.inSecretRealm === true) {
       const currentMap = acc.profile.zoneName;
       const floor = acc.profile.huntStage || 0;
-      const secretRealmConfig: Record<string, number> = {
-        大草原: 16,
-        great_plains: 16,
-        猛牛園: 18,
-        bull_pen: 18,
-        蘑菇園: 12,
-        mushroom_garden: 12,
-      };
-      const isSecretFloor = secretRealmConfig[currentMap] === floor;
+      const currentMapId = getMapIdByName(currentMap);
+      const isSecretFloor =
+        currentMapId === 1
+          ? floor === secretRealmConfig[1001].enterFloor
+          : currentMapId === 2
+          ? floor === secretRealmConfig[2001].enterFloor
+          : currentMapId === 4
+          ? floor === secretRealmConfig[4001].enterFloor
+          : false;
       if (!isSecretFloor) {
         acc.profile.inSecretRealm = false;
         addLog(
@@ -612,53 +611,170 @@ async function startBattle(token: string) {
           accounts
         );
 
+        // ========================================================
+        // 3.5 秘徑自動進入偵測與傳送 (放在 checkSetting 之前以防止死鎖)
+        // ========================================================
+        const targetMapIdForSecret = getMapIdByName(
+          acc.automation.battle.setting.map
+        );
+        const isTargetingSecretRealm =
+          targetMapIdForSecret === 1001 ||
+          targetMapIdForSecret === 2001 ||
+          targetMapIdForSecret === 4001;
+
+        const currentMapForSecret = acc.profile.zoneName;
+        const currentMapIdForSecret = getMapIdByName(currentMapForSecret);
+        const targetFloorForSecret =
+          currentMapIdForSecret === 1
+            ? secretRealmConfig[1001].enterFloor
+            : currentMapIdForSecret === 2
+            ? secretRealmConfig[2001].enterFloor
+            : currentMapIdForSecret === 4
+            ? secretRealmConfig[4001].enterFloor
+            : undefined;
+
+        let hasAttemptedSecretRealm = false;
+
+        if (
+          targetFloorForSecret &&
+          acc.profile.huntStage === targetFloorForSecret &&
+          isTargetingSecretRealm
+        ) {
+          const pMode = acc.automation.battle.setting.partyMode;
+          const isParty = pMode && pMode.enabled;
+
+          if (isParty && !pMode.isLeader) {
+            // A. 隊員端：自動發送進入秘徑請求
+            if (acc.profile.inSecretRealm !== true) {
+              addLog(
+                acc,
+                "battle",
+                `[秘徑] 隊員抵達 ${targetFloorForSecret}F，自動發送進入秘徑請求...`
+              );
+              try {
+                const enterRes = await acc.userObj.enterSecretRealm();
+                if (enterRes && !enterRes.error) {
+                  acc.profile.inSecretRealm = true;
+                  addLog(acc, "battle", `[秘徑] 隊員進入秘徑成功！`);
+                } else {
+                  addLog(
+                    acc,
+                    "battle",
+                    `[秘徑] 隊員進入秘徑失敗: ${
+                      enterRes?.message || "未知錯誤"
+                    }`
+                  );
+                }
+              } catch (e) {
+                console.error(`[隊員進入秘徑] 失敗:`, e);
+              }
+              hasAttemptedSecretRealm = true;
+            }
+          } else {
+            // B. 個人模式 或 隊長模式
+            if (!isParty) {
+              // B1. 個人模式：直接自動進入秘徑
+              if (acc.profile.inSecretRealm !== true) {
+                addLog(
+                  acc,
+                  "battle",
+                  `[秘徑] 抵達 ${targetFloorForSecret}F 秘徑層，自動發送進入秘徑請求...`
+                );
+                const enterRes = await acc.userObj.enterSecretRealm();
+                if (enterRes && !enterRes.error) {
+                  acc.profile.inSecretRealm = true;
+                  addLog(acc, "battle", `[秘徑] 成功進入秘徑！`);
+                } else {
+                  addLog(
+                    acc,
+                    "battle",
+                    `[秘徑] 進入秘徑失敗: ${
+                      enterRes?.message || "未知錯誤"
+                    }，將於下輪重試...`
+                  );
+                }
+                hasAttemptedSecretRealm = true;
+              }
+            } else if (pMode.isLeader) {
+              // B2. 隊長模式：等託管隊友都到齊並進入秘境後，隊長再殿後進入秘境
+              const partyStatus = await acc.userObj.getPartyStatus();
+              if (
+                partyStatus &&
+                partyStatus.party &&
+                partyStatus.party.members
+              ) {
+                const members = partyStatus.party.members;
+                let allManagedMembersInSecretRealm = true;
+                const waitingMemberNames: string[] = [];
+
+                for (const member of members) {
+                  const memberAcc = accounts.find(
+                    (a) =>
+                      (a.profile.id &&
+                        Number(a.profile.id) === Number(member.user_id)) ||
+                      (a.profile.userId &&
+                        Number(a.profile.userId) === Number(member.user_id)) ||
+                      (a.profile.user_id &&
+                        Number(a.profile.user_id) === Number(member.user_id))
+                  );
+
+                  if (memberAcc) {
+                    if (memberAcc.profile.huntStage === targetFloorForSecret) {
+                      if (memberAcc.profile.inSecretRealm !== true) {
+                        allManagedMembersInSecretRealm = false;
+                        waitingMemberNames.push(member.character_name);
+                      }
+                    }
+                  }
+                }
+
+                if (!allManagedMembersInSecretRealm) {
+                  addLog(
+                    acc,
+                    "battle",
+                    `[秘徑等待] 隊長在 ${targetFloorForSecret}F 等待同在該層的我方隊友進入秘徑: ${waitingMemberNames.join(
+                      ", "
+                    )}...`
+                  );
+                } else {
+                  if (acc.profile.inSecretRealm !== true) {
+                    addLog(
+                      acc,
+                      "battle",
+                      `[秘徑] 託管隊友已全數進入，隊長殿後進入秘徑！`
+                    );
+                    const enterRes = await acc.userObj.enterSecretRealm();
+                    if (enterRes && !enterRes.error) {
+                      acc.profile.inSecretRealm = true;
+                      addLog(acc, "battle", `[秘徑] 隊長成功進入秘徑！`);
+                    } else {
+                      addLog(
+                        acc,
+                        "battle",
+                        `[秘徑] 隊長進入秘徑失敗: ${
+                          enterRes?.message || "未知錯誤"
+                        }，下輪重試...`
+                      );
+                    }
+                  }
+                }
+                hasAttemptedSecretRealm = true;
+              }
+            }
+          }
+        }
+
+        if (hasAttemptedSecretRealm) {
+          await sleep(11000); // 傳送冷聚
+          if (acc.automation.battle.loopId !== currentLoopId) break;
+          continue;
+        }
+
         // 4. 執行檢查 (HP, SP, 地圖, 補品, 裝備)
         const checkResult = await checker.checkSetting();
         if (checkResult) {
           const pMode = acc.automation.battle.setting.partyMode;
           if (pMode && pMode.enabled && !pMode.isLeader) {
-            // 隊員端：秘境自動進入偵測
-            const secretRealmConfig: Record<string, number> = {
-              大草原: 16,
-              great_plains: 16,
-              猛牛園: 18,
-              bull_pen: 18,
-              蘑菇園: 12,
-              mushroom_garden: 12,
-            };
-            const currentMap = acc.profile.zoneName;
-            const targetFloor = secretRealmConfig[currentMap];
-            if (
-              targetFloor &&
-              acc.profile.huntStage === targetFloor &&
-              acc.automation.battle.setting.enterSecretRealmEnabled
-            ) {
-              if (acc.profile.inSecretRealm !== true) {
-                addLog(
-                  acc,
-                  "battle",
-                  `[秘徑] 隊員抵達 ${targetFloor}F，自動發送進入秘徑請求...`
-                );
-                try {
-                  const enterRes = await acc.userObj.enterSecretRealm();
-                  if (enterRes && !enterRes.error) {
-                    acc.profile.inSecretRealm = true;
-                    addLog(acc, "battle", `[秘徑] 隊員進入秘徑成功！`);
-                  } else {
-                    addLog(
-                      acc,
-                      "battle",
-                      `[秘徑] 隊員進入秘徑失敗: ${
-                        enterRes?.message || "未知錯誤"
-                      }`
-                    );
-                  }
-                } catch (e) {
-                  console.error(`[隊員進入秘徑] 失敗:`, e);
-                }
-              }
-            }
-
             addLog(
               acc,
               "battle",
@@ -686,195 +802,78 @@ async function startBattle(token: string) {
             }
           } else {
             let proceedWithBattle = true;
-
-            // 秘境偵測與組隊協調邏輯
-            const secretRealmConfig: Record<string, number> = {
-              大草原: 16,
-              great_plains: 16,
-              猛牛園: 18,
-              bull_pen: 18,
-              蘑菇園: 12,
-              mushroom_garden: 12,
-            };
-            const currentMap = acc.profile.zoneName;
-            const targetFloor = secretRealmConfig[currentMap];
-
-            if (
-              targetFloor &&
-              acc.profile.huntStage === targetFloor &&
-              acc.automation.battle.setting.enterSecretRealmEnabled
-            ) {
-              const isParty = pMode && pMode.enabled;
-
-              if (!isParty) {
-                // A. 個人模式：直接自動進入秘徑
-                if (acc.profile.inSecretRealm !== true) {
-                  addLog(
-                    acc,
-                    "battle",
-                    `[秘徑] 抵達 ${targetFloor}F 秘徑層，自動發送進入秘徑請求...`
-                  );
-                  const enterRes = await acc.userObj.enterSecretRealm();
-                  if (enterRes && !enterRes.error) {
-                    acc.profile.inSecretRealm = true;
-                    addLog(acc, "battle", `[秘徑] 成功進入秘徑！`);
-                    proceedWithBattle = false; // 本輪先不進行戰鬥，等下輪
-                  } else {
-                    addLog(
-                      acc,
-                      "battle",
-                      `[秘徑] 進入秘徑失敗: ${
-                        enterRes?.message || "未知錯誤"
-                      }，將於下輪重試...`
-                    );
-                    proceedWithBattle = false;
-                  }
-                }
-              } else if (pMode.isLeader) {
-                // B. 隊長模式：殿後進入秘境邏輯
-                // 1. 取得隊伍狀態
-                const partyStatus = await acc.userObj.getPartyStatus();
-                if (
-                  partyStatus &&
-                  partyStatus.party &&
-                  partyStatus.party.members
-                ) {
-                  const members = partyStatus.party.members;
-                  let allManagedMembersInSecretRealm = true;
-                  const waitingMemberNames: string[] = [];
-
-                  for (const member of members) {
-                    // 排除隊長自己
-                    if (
-                      (acc.profile.id &&
-                        Number(member.user_id) === Number(acc.profile.id)) ||
-                      (acc.profile.userId &&
-                        Number(member.user_id) ===
-                          Number(acc.profile.userId)) ||
-                      (acc.profile.user_id &&
-                        Number(member.user_id) === Number(acc.profile.user_id))
-                    ) {
-                      continue;
-                    }
-
-                    // 尋找我方託管的隊友
-                    const memberAcc = accounts.find(
-                      (a) =>
-                        (a.profile.id &&
-                          Number(a.profile.id) === Number(member.user_id)) ||
-                        (a.profile.userId &&
-                          Number(a.profile.userId) ===
-                            Number(member.user_id)) ||
-                        (a.profile.user_id &&
-                          Number(a.profile.user_id) === Number(member.user_id))
-                    );
-
-                    if (memberAcc) {
-                      // 只有當該隊友也正處於秘境層時，隊長才需要等他進入秘境；若他在其他樓層，直接忽略不卡 16F
-                      if (memberAcc.profile.huntStage === targetFloor) {
-                        if (memberAcc.profile.inSecretRealm !== true) {
-                          allManagedMembersInSecretRealm = false;
-                          waitingMemberNames.push(member.character_name);
-                        }
-                      }
-                    }
-                  }
-
-                  if (!allManagedMembersInSecretRealm) {
-                    // 還有同在秘境層的託管隊友沒進去，隊長原地等待
-                    addLog(
-                      acc,
-                      "battle",
-                      `[秘徑等待] 隊長在 ${targetFloor}F 等待同在該層的我方隊友進入秘徑: ${waitingMemberNames.join(
-                        ", "
-                      )}...`
-                    );
-                    proceedWithBattle = false;
-                  } else {
-                    // 我方託管隊友皆已進入秘徑，隊長自己進入秘徑
-                    if (acc.profile.inSecretRealm !== true) {
+            if (proceedWithBattle) {
+              if (pMode && pMode.enabled) {
+                if (pMode.isLeader) {
+                  // 0.5 王關停留判定
+                  if (pMode.stopAtBoss) {
+                    const bossFloors: { [key: string]: number } = {
+                      大草原: 30,
+                      猛牛園: 25,
+                      兒童樂園: 18,
+                      蘑菇園: 24,
+                      圓明園: 20,
+                    };
+                    const currentMap = acc.profile.zoneName;
+                    const bossFloor = bossFloors[currentMap];
+                    if (bossFloor && acc.profile.huntStage === bossFloor) {
                       addLog(
                         acc,
                         "battle",
-                        `[秘徑] 託管隊友已全數進入，隊長殿後進入秘徑！`
+                        `[王關停留] 已抵達王關樓層 (${bossFloor}F)，原地暫停自動戰鬥以便手動挑戰！`
                       );
-                      const enterRes = await acc.userObj.enterSecretRealm();
-                      if (enterRes && !enterRes.error) {
-                        acc.profile.inSecretRealm = true;
-                        addLog(acc, "battle", `[秘徑] 隊長成功進入秘徑！`);
-                        proceedWithBattle = false; // 本輪進完先不戰鬥
-                      } else {
+
+                      // 取得託管的組員，全部關閉自動戰鬥
+                      const partyStatus = await acc.userObj.getPartyStatus();
+                      const partyMemberIds = new Set<number>();
+                      if (
+                        partyStatus &&
+                        partyStatus.party &&
+                        partyStatus.party.members
+                      ) {
+                        partyStatus.party.members.forEach((m: any) => {
+                          partyMemberIds.add(Number(m.user_id));
+                        });
+                      }
+                      if (acc.profile.id)
+                        partyMemberIds.add(Number(acc.profile.id));
+                      if (acc.profile.userId)
+                        partyMemberIds.add(Number(acc.profile.userId));
+                      if (acc.profile.user_id)
+                        partyMemberIds.add(Number(acc.profile.user_id));
+
+                      const managedPartyAccs = accounts.filter(
+                        (a) =>
+                          (a.profile.id &&
+                            partyMemberIds.has(Number(a.profile.id))) ||
+                          (a.profile.userId &&
+                            partyMemberIds.has(Number(a.profile.userId))) ||
+                          (a.profile.user_id &&
+                            partyMemberIds.has(Number(a.profile.user_id)))
+                      );
+
+                      for (const memberAcc of managedPartyAccs) {
+                        memberAcc.automation.battle.running = false;
                         addLog(
-                          acc,
+                          memberAcc,
                           "battle",
-                          `[秘徑] 隊長進入秘徑失敗: ${
-                            enterRes?.message || "未知錯誤"
-                          }，下輪重試...`
+                          `[王關停留] 隊長已在王關暫停自動戰鬥，組員原地暫停。`
                         );
-                        proceedWithBattle = false;
                       }
-                    } else {
-                      // 隊長自己也已經進了秘境
-                      // 此時如果隊伍有外人（非我方託管且有啟用 hasExternalMembers），且外人處於秘境層，隊長在此階段需要等待外人就緒
-                      if (pMode.hasExternalMembers) {
-                        let externalInRealmWaiting = false;
-                        for (const member of members) {
-                          // 排除我方託管帳號
-                          const isManaged = accounts.some(
-                            (a) =>
-                              (a.profile.id &&
-                                Number(a.profile.id) ===
-                                  Number(member.user_id)) ||
-                              (a.profile.userId &&
-                                Number(a.profile.userId) ===
-                                  Number(member.user_id)) ||
-                              (a.profile.user_id &&
-                                Number(a.profile.user_id) ===
-                                  Number(member.user_id))
-                          );
-                          if (!isManaged) {
-                            // 只要該外人也處於秘境層 (floor === 16)，隊長就需要等待外人就緒
-                            if (member.floor === targetFloor) {
-                              externalInRealmWaiting = true;
-                              addLog(
-                                acc,
-                                "battle",
-                                `[秘徑等待] 隊外成員 ${member.character_name} 仍處於 ${targetFloor}F，等待其就緒...`
-                              );
-                            }
-                          }
-                        }
-                        if (externalInRealmWaiting) {
-                          proceedWithBattle = false;
-                        }
-                      }
+                      break;
                     }
                   }
-                }
-              }
-            }
 
-            if (pMode && pMode.enabled) {
-              if (pMode.isLeader) {
-                // 0.5 王關停留判定
-                if (pMode.stopAtBoss) {
-                  const bossFloors: { [key: string]: number } = {
-                    大草原: 30,
-                    猛牛園: 25,
-                    兒童樂園: 18,
-                    蘑菇園: 24,
-                    圓明園: 20,
-                  };
-                  const currentMap = acc.profile.zoneName;
-                  const bossFloor = bossFloors[currentMap];
-                  if (bossFloor && acc.profile.huntStage === bossFloor) {
+                  // 1. 層數上限判定與帶隊回城落地確認
+                  const maxFloor = pMode.maxFloor || 0;
+                  if (maxFloor > 0 && acc.profile.huntStage >= maxFloor) {
                     addLog(
                       acc,
                       "battle",
-                      `[王關停留] 已抵達王關樓層 (${bossFloor}F)，原地暫停自動戰鬥以便手動挑戰！`
+                      `[組隊模式] 已達隊伍層數上限 (${acc.profile.huntStage}F >= ${maxFloor}F)，帶隊回城並停止自動戰鬥！`
                     );
 
-                    // 取得託管的組員，全部關閉自動戰鬥
+                    // 找到所有屬於該隊伍的我方託管帳號 (包含隊長自己)
                     const partyStatus = await acc.userObj.getPartyStatus();
                     const partyMemberIds = new Set<number>();
                     if (
@@ -903,520 +902,482 @@ async function startBattle(token: string) {
                           partyMemberIds.has(Number(a.profile.user_id)))
                     );
 
+                    // 隊長帶頭 move(0)
+                    let leaderNewProfile: any = null;
+                    try {
+                      leaderNewProfile = await acc.userObj.move(0);
+                      if (leaderNewProfile && !leaderNewProfile.error) {
+                        safeUpdateProfile(acc, leaderNewProfile);
+                      }
+                    } catch (e) {
+                      console.error("[組隊回城] 隊長發起移動失敗:", e);
+                    }
+
+                    // 更新所有隊友 profile 狀態
                     for (const memberAcc of managedPartyAccs) {
-                      memberAcc.automation.battle.running = false;
-                      addLog(
-                        memberAcc,
-                        "battle",
-                        `[王關停留] 隊長已在王關暫停自動戰鬥，組員原地暫停。`
+                      if (
+                        Number(memberAcc.profile.id) !== Number(acc.profile.id)
+                      ) {
+                        try {
+                          await refreshAccountState(memberAcc);
+                        } catch (e) {
+                          console.error(
+                            `[組隊回城] 更新隊員 ${memberAcc.profile.name} 狀態失敗:`,
+                            e
+                          );
+                        }
+                      }
+                    }
+
+                    // 計算移動剩餘時間
+                    let waitTime = 11000;
+                    if (acc.profile.actionStatus === "移動") {
+                      const offset = acc.profile.serverOffsetMs || 0;
+                      const adjustedNow = moment().add(offset, "ms");
+                      const remainingMs = moment(acc.profile.actionStart).diff(
+                        adjustedNow
+                      );
+                      waitTime = Math.min(
+                        300000,
+                        Math.max(11000, remainingMs + 2000)
+                      );
+                      console.log(
+                        `[組隊回城] ${
+                          acc.profile.name
+                        } 移動剩餘時間: ${Math.ceil(
+                          remainingMs / 1000
+                        )} 秒 | 全員對齊等待: ${Math.ceil(waitTime / 1000)} 秒`
                       );
                     }
+
+                    // 等待落地時間
+                    await sleep(waitTime);
+
+                    // 全員落地確認 (帶重試機制)
+                    await Promise.all(
+                      managedPartyAccs.map(async (memberAcc) => {
+                        let success = false;
+                        let retries = 5;
+                        while (retries > 0 && !success) {
+                          try {
+                            addLog(
+                              memberAcc,
+                              "battle",
+                              `[組隊回城] 發送抵達確認 (moveComplete)，剩餘重試次數: ${retries}...`
+                            );
+                            const completedProfile =
+                              await memberAcc.userObj.moveComplete();
+                            if (completedProfile && !completedProfile.error) {
+                              safeUpdateProfile(memberAcc, completedProfile);
+                              addLog(
+                                memberAcc,
+                                "battle",
+                                `[組隊回城] 已成功抵達起始之鎮！`
+                              );
+                              success = true;
+                            } else {
+                              addLog(
+                                memberAcc,
+                                "battle",
+                                `[組隊回城] 抵達確認失敗：${
+                                  completedProfile?.message || "未知錯誤"
+                                }，將於 5 秒後重試...`
+                              );
+                              retries--;
+                              if (retries > 0) await sleep(5000);
+                            }
+                          } catch (e) {
+                            console.error(
+                              `[組隊回城] 隊員 ${memberAcc.profile.name} 落地確認出錯:`,
+                              e
+                            );
+                            retries--;
+                            if (retries > 0) await sleep(5000);
+                          }
+                        }
+                        if (!success) {
+                          addLog(
+                            memberAcc,
+                            "battle",
+                            `[警告] 隊員 ${memberAcc.profile.name} 最終未能成功落地，請手動確認！`
+                          );
+                        }
+                        memberAcc.automation.battle.running = false;
+                      })
+                    );
+
                     break;
                   }
-                }
 
-                // 1. 層數上限判定與帶隊回城落地確認
-                const maxFloor = pMode.maxFloor || 0;
-                if (maxFloor > 0 && acc.profile.huntStage >= maxFloor) {
-                  addLog(
-                    acc,
-                    "battle",
-                    `[組隊模式] 已達隊伍層數上限 (${acc.profile.huntStage}F >= ${maxFloor}F)，帶隊回城並停止自動戰鬥！`
-                  );
-
-                  // 找到所有屬於該隊伍的我方託管帳號 (包含隊長自己)
+                  // 2. 獲取並巡查隊伍狀態
+                  let allMembersReady = true;
                   const partyStatus = await acc.userObj.getPartyStatus();
-                  const partyMemberIds = new Set<number>();
                   if (
                     partyStatus &&
                     partyStatus.party &&
                     partyStatus.party.members
                   ) {
-                    partyStatus.party.members.forEach((m: any) => {
-                      partyMemberIds.add(Number(m.user_id));
-                    });
-                  }
-                  if (acc.profile.id)
-                    partyMemberIds.add(Number(acc.profile.id));
-                  if (acc.profile.userId)
-                    partyMemberIds.add(Number(acc.profile.userId));
-                  if (acc.profile.user_id)
-                    partyMemberIds.add(Number(acc.profile.user_id));
+                    const members = partyStatus.party.members;
 
-                  const managedPartyAccs = accounts.filter(
-                    (a) =>
-                      (a.profile.id &&
-                        partyMemberIds.has(Number(a.profile.id))) ||
-                      (a.profile.userId &&
-                        partyMemberIds.has(Number(a.profile.userId))) ||
-                      (a.profile.user_id &&
-                        partyMemberIds.has(Number(a.profile.user_id)))
-                  );
-
-                  // 隊長帶頭 move(0)
-                  let leaderNewProfile: any = null;
-                  try {
-                    leaderNewProfile = await acc.userObj.move(0);
-                    if (leaderNewProfile && !leaderNewProfile.error) {
-                      safeUpdateProfile(acc, leaderNewProfile);
-                    }
-                  } catch (e) {
-                    console.error("[組隊回城] 隊長發起移動失敗:", e);
-                  }
-
-                  // 更新所有隊友 profile 狀態
-                  for (const memberAcc of managedPartyAccs) {
-                    if (
-                      Number(memberAcc.profile.id) !== Number(acc.profile.id)
-                    ) {
-                      try {
-                        await refreshAccountState(memberAcc);
-                      } catch (e) {
-                        console.error(
-                          `[組隊回城] 更新隊員 ${memberAcc.profile.name} 狀態失敗:`,
-                          e
-                        );
-                      }
-                    }
-                  }
-
-                  // 計算移動剩餘時間
-                  let waitTime = 11000;
-                  if (acc.profile.actionStatus === "移動") {
-                    const offset = acc.profile.serverOffsetMs || 0;
-                    const adjustedNow = moment().add(offset, "ms");
-                    const remainingMs = moment(acc.profile.actionStart).diff(
-                      adjustedNow
-                    );
-                    waitTime = Math.min(
-                      300000,
-                      Math.max(11000, remainingMs + 2000)
-                    );
-                    console.log(
-                      `[組隊回城] ${acc.profile.name} 移動剩餘時間: ${Math.ceil(
-                        remainingMs / 1000
-                      )} 秒 | 全員對齊等待: ${Math.ceil(waitTime / 1000)} 秒`
-                    );
-                  }
-
-                  // 等待落地時間
-                  await sleep(waitTime);
-
-                  // 全員落地確認 (帶重試機制)
-                  await Promise.all(
-                    managedPartyAccs.map(async (memberAcc) => {
-                      let success = false;
-                      let retries = 5;
-                      while (retries > 0 && !success) {
-                        try {
-                          addLog(
-                            memberAcc,
-                            "battle",
-                            `[組隊回城] 發送抵達確認 (moveComplete)，剩餘重試次數: ${retries}...`
-                          );
-                          const completedProfile =
-                            await memberAcc.userObj.moveComplete();
-                          if (completedProfile && !completedProfile.error) {
-                            safeUpdateProfile(memberAcc, completedProfile);
-                            addLog(
-                              memberAcc,
-                              "battle",
-                              `[組隊回城] 已成功抵達起始之鎮！`
-                            );
-                            success = true;
-                          } else {
-                            addLog(
-                              memberAcc,
-                              "battle",
-                              `[組隊回城] 抵達確認失敗：${
-                                completedProfile?.message || "未知錯誤"
-                              }，將於 5 秒後重試...`
-                            );
-                            retries--;
-                            if (retries > 0) await sleep(5000);
-                          }
-                        } catch (e) {
-                          console.error(
-                            `[組隊回城] 隊員 ${memberAcc.profile.name} 落地確認出錯:`,
-                            e
-                          );
-                          retries--;
-                          if (retries > 0) await sleep(5000);
-                        }
-                      }
-                      if (!success) {
-                        addLog(
-                          memberAcc,
-                          "battle",
-                          `[警告] 隊員 ${memberAcc.profile.name} 最終未能成功落地，請手動確認！`
-                        );
-                      }
-                      memberAcc.automation.battle.running = false;
-                    })
-                  );
-
-                  break;
-                }
-
-                // 2. 獲取並巡查隊伍狀態
-                let allMembersReady = true;
-                const partyStatus = await acc.userObj.getPartyStatus();
-                if (
-                  partyStatus &&
-                  partyStatus.party &&
-                  partyStatus.party.members
-                ) {
-                  const members = partyStatus.party.members;
-
-                  for (const member of members) {
-                    // 排除隊長自己
-                    if (
-                      (acc.profile.id &&
-                        Number(member.user_id) === Number(acc.profile.id)) ||
-                      (acc.profile.userId &&
-                        Number(member.user_id) ===
-                          Number(acc.profile.userId)) ||
-                      (acc.profile.user_id &&
-                        Number(member.user_id) === Number(acc.profile.user_id))
-                    ) {
-                      continue;
-                    }
-
-                    // 尋找我方託管帳號
-                    const memberAcc = accounts.find(
-                      (a) =>
-                        (a.profile.id &&
-                          Number(a.profile.id) === Number(member.user_id)) ||
-                        (a.profile.userId &&
-                          Number(a.profile.userId) ===
-                            Number(member.user_id)) ||
-                        (a.profile.user_id &&
-                          Number(a.profile.user_id) === Number(member.user_id))
-                    );
-                    if (memberAcc) {
-                      // A. 我方託管組員
-                      // 孤狼帶隊模式：完全無視所有我方組員狀態，直接跳過
-                      if (pMode.ignoreMemberStatus) {
+                    for (const member of members) {
+                      // 排除隊長自己
+                      if (
+                        (acc.profile.id &&
+                          Number(member.user_id) === Number(acc.profile.id)) ||
+                        (acc.profile.userId &&
+                          Number(member.user_id) ===
+                            Number(acc.profile.userId)) ||
+                        (acc.profile.user_id &&
+                          Number(member.user_id) ===
+                            Number(acc.profile.user_id))
+                      ) {
                         continue;
                       }
 
-                      // 先檢測是否死亡
-                      const isMemberDead =
-                        memberAcc.profile.actionStatus === "重生" ||
-                        memberAcc.profile.hp <= 0;
-                      if (isMemberDead) {
-                        if (pMode.deathPolicy === "rerun") {
-                          addLog(
-                            acc,
-                            "battle",
-                            `[組隊撤退] 偵測到隊友 ${member.character_name} 死亡，全員退回起始之鎮重整！`
-                          );
-                          const leaderNewProfile = await acc.userObj.move(0);
-                          if (leaderNewProfile && !leaderNewProfile.error) {
-                            safeUpdateProfile(acc, leaderNewProfile);
+                      // 尋找我方託管帳號
+                      const memberAcc = accounts.find(
+                        (a) =>
+                          (a.profile.id &&
+                            Number(a.profile.id) === Number(member.user_id)) ||
+                          (a.profile.userId &&
+                            Number(a.profile.userId) ===
+                              Number(member.user_id)) ||
+                          (a.profile.user_id &&
+                            Number(a.profile.user_id) ===
+                              Number(member.user_id))
+                      );
+                      if (memberAcc) {
+                        // A. 我方託管組員
+                        // 孤狼帶隊模式：完全無視所有我方組員狀態，直接跳過
+                        if (pMode.ignoreMemberStatus) {
+                          continue;
+                        }
+
+                        // 先檢測是否死亡
+                        const isMemberDead =
+                          memberAcc.profile.actionStatus === "重生" ||
+                          memberAcc.profile.hp <= 0;
+                        if (isMemberDead) {
+                          if (pMode.deathPolicy === "rerun") {
+                            addLog(
+                              acc,
+                              "battle",
+                              `[組隊撤退] 偵測到隊友 ${member.character_name} 死亡，全員退回起始之鎮重整！`
+                            );
+                            const leaderNewProfile = await acc.userObj.move(0);
+                            if (leaderNewProfile && !leaderNewProfile.error) {
+                              safeUpdateProfile(acc, leaderNewProfile);
+                            }
+                            allMembersReady = false;
+                            break;
+                          } else {
+                            addLog(
+                              acc,
+                              "battle",
+                              `[組隊等待] 隊員 ${member.character_name} 死亡，隊伍在原地暫停等待其歸隊...`
+                            );
+                            allMembersReady = false;
                           }
-                          allMembersReady = false;
-                          break;
-                        } else {
+                        }
+
+                        // 檢查忙碌狀態 (如果組員正在移動、休息、重生，隊長必須等待)
+                        const isMemberBusy =
+                          memberAcc.profile.actionStatus !== "空閒" &&
+                          memberAcc.profile.actionStatus !== "戰鬥";
+                        if (isMemberBusy) {
                           addLog(
                             acc,
                             "battle",
-                            `[組隊等待] 隊員 ${member.character_name} 死亡，隊伍在原地暫停等待其歸隊...`
+                            `[組隊等待] 組員 ${member.character_name} 目前忙碌中 (${memberAcc.profile.actionStatus})，等待其完成...`
                           );
                           allMembersReady = false;
                         }
-                      }
 
-                      // 檢查忙碌狀態 (如果組員正在移動、休息、重生，隊長必須等待)
-                      const isMemberBusy =
-                        memberAcc.profile.actionStatus !== "空閒" &&
-                        memberAcc.profile.actionStatus !== "戰鬥";
-                      if (isMemberBusy) {
-                        addLog(
-                          acc,
-                          "battle",
-                          `[組隊等待] 組員 ${member.character_name} 目前忙碌中 (${memberAcc.profile.actionStatus})，等待其完成...`
-                        );
-                        allMembersReady = false;
-                      }
-
-                      // 檢查所在區域是否與隊長一致
-                      const isSameZone =
-                        memberAcc.profile.zoneName === acc.profile.zoneName;
-                      if (!isSameZone) {
-                        addLog(
-                          acc,
-                          "battle",
-                          `[組隊等待] 組員 ${member.character_name} 目前在 ${memberAcc.profile.zoneName}，與隊長所在區域 (${acc.profile.zoneName}) 不一致，等待其抵達...`
-                        );
-                        allMembersReady = false;
-                      }
-
-                      const memberHpLimit =
-                        memberAcc.automation.battle.setting.hp || 100;
-                      const memberSpLimit =
-                        memberAcc.automation.battle.setting.sp || 150;
-
-                      const isMemberHpReady =
-                        member.hp >= member.max_hp || member.hp > memberHpLimit;
-
-                      const isMemberSpReady =
-                        member.mp >= member.max_mp || member.mp > memberSpLimit;
-
-                      if (!isMemberHpReady || !isMemberSpReady) {
-                        addLog(
-                          acc,
-                          "battle",
-                          `[組隊等待] 組員 ${member.character_name} HP/SP 不足 (HP: ${member.hp}/${member.max_hp}, SP: ${member.mp}/${member.max_mp})，等待其恢復...`
-                        );
-                        allMembersReady = false;
-                      }
-
-                      // 最低耐久度與空手檢查
-                      const minDur = pMode.minDurability || 10;
-                      const memberEquips = memberAcc.items.equipments || [];
-                      const equippedWeapons = memberEquips.filter(
-                        (w: any) => w.status === "已裝備"
-                      );
-                      const weaponTypes = [
-                        "短刀",
-                        "單手劍",
-                        "細劍",
-                        "單手錘",
-                        "盾牌",
-                        "雙手斧",
-                        "雙手劍",
-                        "太刀",
-                        "長槍",
-                      ];
-                      const equippedWeapon = equippedWeapons.find((w: any) =>
-                        weaponTypes.includes(w.typeName)
-                      );
-
-                      if (equippedWeapon) {
-                        const weaponReady = equippedWeapon.durability >= minDur;
-                        if (!weaponReady) {
+                        // 檢查所在區域是否與隊長一致
+                        const isSameZone =
+                          memberAcc.profile.zoneName === acc.profile.zoneName;
+                        if (!isSameZone) {
                           addLog(
                             acc,
                             "battle",
-                            `[組隊等待] 組員 ${member.character_name} 武器 ${equippedWeapon.name} 耐久低於統一門檻 (${equippedWeapon.durability} < ${minDur})，等待更換...`
+                            `[組隊等待] 組員 ${member.character_name} 目前在 ${memberAcc.profile.zoneName}，與隊長所在區域 (${acc.profile.zoneName}) 不一致，等待其抵達...`
                           );
                           allMembersReady = false;
+                        }
+
+                        const memberHpLimit =
+                          memberAcc.automation.battle.setting.hp || 100;
+                        const memberSpLimit =
+                          memberAcc.automation.battle.setting.sp || 150;
+
+                        const isMemberHpReady =
+                          member.hp >= member.max_hp ||
+                          member.hp > memberHpLimit;
+
+                        const isMemberSpReady =
+                          member.mp >= member.max_mp ||
+                          member.mp > memberSpLimit;
+
+                        if (!isMemberHpReady || !isMemberSpReady) {
+                          addLog(
+                            acc,
+                            "battle",
+                            `[組隊等待] 組員 ${member.character_name} HP/SP 不足 (HP: ${member.hp}/${member.max_hp}, SP: ${member.mp}/${member.max_mp})，等待其恢復...`
+                          );
+                          allMembersReady = false;
+                        }
+
+                        // 最低耐久度與空手檢查
+                        const minDur = pMode.minDurability || 10;
+                        const memberEquips = memberAcc.items.equipments || [];
+                        const equippedWeapons = memberEquips.filter(
+                          (w: any) => w.status === "已裝備"
+                        );
+                        const weaponTypes = [
+                          "短刀",
+                          "單手劍",
+                          "細劍",
+                          "單手錘",
+                          "盾牌",
+                          "雙手斧",
+                          "雙手劍",
+                          "太刀",
+                          "長槍",
+                        ];
+                        const equippedWeapon = equippedWeapons.find((w: any) =>
+                          weaponTypes.includes(w.typeName)
+                        );
+
+                        if (equippedWeapon) {
+                          const weaponReady =
+                            equippedWeapon.durability >= minDur;
+                          if (!weaponReady) {
+                            addLog(
+                              acc,
+                              "battle",
+                              `[組隊等待] 組員 ${member.character_name} 武器 ${equippedWeapon.name} 耐久低於統一門檻 (${equippedWeapon.durability} < ${minDur})，等待更換...`
+                            );
+                            allMembersReady = false;
+                          }
+                        } else {
+                          const emptyHandedAllowed = pMode.allowEmptyHanded;
+                          if (!emptyHandedAllowed) {
+                            addLog(
+                              acc,
+                              "battle",
+                              `[組隊等待] 組員 ${member.character_name} 目前空手（不允許空手），等待其裝備武器...`
+                            );
+                            allMembersReady = false;
+                          }
                         }
                       } else {
-                        const emptyHandedAllowed = pMode.allowEmptyHanded;
-                        if (!emptyHandedAllowed) {
-                          addLog(
-                            acc,
-                            "battle",
-                            `[組隊等待] 組員 ${member.character_name} 目前空手（不允許空手），等待其裝備武器...`
-                          );
-                          allMembersReady = false;
-                        }
-                      }
-                    } else {
-                      // B. 隊外玩家 (非我方託管)
-                      if (pMode.hasExternalMembers) {
-                        // 檢查忙碌狀態 (如果組員正在移動、休息，隊長必須等待)
-                        const isExternalBusy =
-                          member.tower_move_ends_at !== null ||
-                          member.rest_started_at !== null;
-                        if (isExternalBusy) {
-                          addLog(
-                            acc,
-                            "battle",
-                            `[組隊等待] 隊外組員 ${
-                              member.character_name
-                            } 目前忙碌中 (${
-                              member.tower_move_ends_at ? "移動中" : "休息中"
-                            })，等待其完成...`
-                          );
-                          allMembersReady = false;
-                        }
+                        // B. 隊外玩家 (非我方託管)
+                        if (pMode.hasExternalMembers) {
+                          // 檢查忙碌狀態 (如果組員正在移動、休息，隊長必須等待)
+                          const isExternalBusy =
+                            member.tower_move_ends_at !== null ||
+                            member.rest_started_at !== null;
+                          if (isExternalBusy) {
+                            addLog(
+                              acc,
+                              "battle",
+                              `[組隊等待] 隊外組員 ${
+                                member.character_name
+                              } 目前忙碌中 (${
+                                member.tower_move_ends_at ? "移動中" : "休息中"
+                              })，等待其完成...`
+                            );
+                            allMembersReady = false;
+                          }
 
-                        const hpPercent = member.max_hp
-                          ? member.hp / member.max_hp
-                          : 1;
-                        const mpPercent = member.max_mp
-                          ? member.mp / member.max_mp
-                          : 1;
-                        const externalReady =
-                          hpPercent >= 0.5 && mpPercent >= 0.3;
-                        if (!externalReady) {
-                          addLog(
-                            acc,
-                            "battle",
-                            `[組隊等待] 隊外組員 ${
-                              member.character_name
-                            } 狀態不足 (HP: ${Math.round(
-                              hpPercent * 100
-                            )}%, SP: ${Math.round(
-                              mpPercent * 100
-                            )}%)，等待恢復...`
-                          );
-                          allMembersReady = false;
+                          const hpPercent = member.max_hp
+                            ? member.hp / member.max_hp
+                            : 1;
+                          const mpPercent = member.max_mp
+                            ? member.mp / member.max_mp
+                            : 1;
+                          const externalReady =
+                            hpPercent >= 0.5 && mpPercent >= 0.3;
+                          if (!externalReady) {
+                            addLog(
+                              acc,
+                              "battle",
+                              `[組隊等待] 隊外組員 ${
+                                member.character_name
+                              } 狀態不足 (HP: ${Math.round(
+                                hpPercent * 100
+                              )}%, SP: ${Math.round(
+                                mpPercent * 100
+                              )}%)，等待恢復...`
+                            );
+                            allMembersReady = false;
+                          }
                         }
                       }
                     }
                   }
-                }
 
-                if (!allMembersReady) {
-                  proceedWithBattle = false;
-                  await sleep(5000);
-                  continue; // 跳出當前 logic 迴圈，等 5 秒後重新檢測
-                }
-              } else {
-                // 隊員不主動發起戰鬥/趕路
-                proceedWithBattle = false;
-              }
-            }
-
-            if (proceedWithBattle) {
-              acc.automation.battle.timeline = null; // 每次發起戰鬥前先清空 Timeline
-              const isParty = acc.automation.battle.setting.partyMode?.enabled;
-              const currentMapId = getMapIdByName(acc.profile.zoneName);
-              const currentStage = acc.profile.huntStage || 0;
-
-              const bossFloors: Record<number, number> = {
-                1: 30, // 大草原 30F
-                2: 25, // 猛牛園 25F
-                3: 18, // 兒童樂園 18F
-                4: 24, // 蘑菇園 24F
-                5: 20, // 圓明園 20F
-              };
-
-              const isSoloBossFloor =
-                !isParty &&
-                currentMapId !== null &&
-                bossFloors[currentMapId] === currentStage;
-
-              if (isSoloBossFloor) {
-                const bossMode =
-                  acc.automation.battle.setting.bossSoloMode || "none";
-                if (bossMode === "none") {
-                  addLog(
-                    acc,
-                    "battle",
-                    `[王關掛網] 已設定不打王，直接進行普通狩獵/爬樓。`
-                  );
+                  if (!allMembersReady) {
+                    proceedWithBattle = false;
+                    await sleep(5000);
+                    continue; // 跳出當前 logic 迴圈，等 5 秒後重新檢測
+                  }
                 } else {
-                  const cooldownEnds = acc.tower?.bossCooldownEndsAt;
-                  const nowMs = Date.now();
-                  const isCd =
-                    cooldownEnds && new Date(cooldownEnds).getTime() > nowMs;
+                  // 隊員不主動發起戰鬥/趕路
+                  proceedWithBattle = false;
+                }
+              }
 
-                  if (isCd) {
-                    if (bossMode === "wait") {
-                      const cdTime = new Date(cooldownEnds).getTime();
-                      const secondsLeft = Math.ceil((cdTime - nowMs) / 1000);
-                      addLog(
-                        acc,
-                        "battle",
-                        `[刷王等待] 已抵達王關 (${currentStage}F)，BOSS 冷卻中，剩餘等待時間: ${secondsLeft} 秒...`
-                      );
-                      await sleep(11000);
-                      continue;
-                    } else {
-                      addLog(
-                        acc,
-                        "battle",
-                        `[王關路過] BOSS 冷卻中，且設定為路過打王，不停留直接狩獵。`
-                      );
-                    }
-                  } else {
+              if (proceedWithBattle) {
+                acc.automation.battle.timeline = null; // 每次發起戰鬥前先清空 Timeline
+                const isParty =
+                  acc.automation.battle.setting.partyMode?.enabled;
+                const currentMapId = getMapIdByName(acc.profile.zoneName);
+                const currentStage = acc.profile.huntStage || 0;
+
+                const bossFloors: Record<number, number> = {
+                  1: 30, // 大草原 30F
+                  2: 25, // 猛牛園 25F
+                  3: 18, // 兒童樂園 18F
+                  4: 24, // 蘑菇園 24F
+                  5: 20, // 圓明園 20F
+                };
+
+                const isSoloBossFloor =
+                  !isParty &&
+                  !acc.profile.inSecretRealm &&
+                  currentMapId !== null &&
+                  bossFloors[currentMapId] === currentStage;
+
+                if (isSoloBossFloor) {
+                  const bossMode =
+                    acc.automation.battle.setting.bossSoloMode || "none";
+                  if (bossMode === "none") {
                     addLog(
                       acc,
                       "battle",
-                      `[挑戰BOSS] BOSS 冷卻完畢，發起挑戰王 API...`
+                      `[王關掛網] 已設定不打王，直接進行普通狩獵/爬樓。`
                     );
-                    const bossRes = await acc.userObj.fightBoss();
-                    if (bossRes) {
-                      if (bossRes.error) {
+                  } else {
+                    const cooldownEnds = acc.tower?.bossCooldownEndsAt;
+                    const nowMs = Date.now();
+                    const isCd =
+                      cooldownEnds && new Date(cooldownEnds).getTime() > nowMs;
+
+                    if (isCd) {
+                      if (bossMode === "wait") {
+                        const cdTime = new Date(cooldownEnds).getTime();
+                        const secondsLeft = Math.ceil((cdTime - nowMs) / 1000);
                         addLog(
                           acc,
                           "battle",
-                          `[挑戰BOSS失敗] 原因: ${
-                            bossRes.message || "未知錯誤"
-                          }`
+                          `[刷王等待] 已抵達王關 (${currentStage}F)，BOSS 冷卻中，剩餘等待時間: ${secondsLeft} 秒...`
                         );
+                        await sleep(11000);
+                        continue;
                       } else {
-                        const fightData = bossRes.data || {};
-                        safeUpdateProfile(
+                        addLog(
                           acc,
-                          bossRes.profile || fightData.profile
+                          "battle",
+                          `[王關路過] BOSS 冷卻中，且設定為路過打王，不停留直接狩獵。`
                         );
-                        if (bossRes.profile?.towerStatus) {
-                          acc.tower = bossRes.profile.towerStatus;
+                      }
+                    } else {
+                      addLog(
+                        acc,
+                        "battle",
+                        `[挑戰BOSS] BOSS 冷卻完畢，發起挑戰王 API...`
+                      );
+                      const bossRes = await acc.userObj.fightBoss();
+                      if (bossRes) {
+                        if (bossRes.error) {
+                          addLog(
+                            acc,
+                            "battle",
+                            `[挑戰BOSS失敗] 原因: ${
+                              bossRes.message || "未知錯誤"
+                            }`
+                          );
+                        } else {
+                          const fightData = bossRes.data || {};
+                          safeUpdateProfile(
+                            acc,
+                            bossRes.profile || fightData.profile
+                          );
+                          if (bossRes.profile?.towerStatus) {
+                            acc.tower = bossRes.profile.towerStatus;
+                          }
+                          let logMsg = `[挑戰BOSS成功] 結果: ${
+                            fightData.winner || "未知"
+                          }, 獲得經驗: ${fightData.exp || 0}, 金幣: ${
+                            fightData.gold || 0
+                          }`;
+                          if (fightData.advance) {
+                            if (fightData.advance.died) logMsg += ` [玩家死亡]`;
+                          }
+                          addLog(acc, "battle", logMsg);
                         }
-                        let logMsg = `[挑戰BOSS成功] 結果: ${
-                          fightData.winner || "未知"
-                        }, 獲得經驗: ${fightData.exp || 0}, 金幣: ${
-                          fightData.gold || 0
-                        }`;
-                        if (fightData.advance) {
-                          if (fightData.advance.died) logMsg += ` [玩家死亡]`;
-                        }
-                        addLog(acc, "battle", logMsg);
+                      }
+                      await sleep(11000);
+                      continue;
+                    }
+                  }
+                }
+
+                const runLevel = isParty
+                  ? acc.automation.battle.setting.partyMode?.runLevel || 0
+                  : acc.automation.battle.setting.runLevel || 0;
+                const enableTimeline =
+                  acc.automation.battle.setting.enableTimeline !== false;
+
+                if (currentStage < runLevel) {
+                  addLog(
+                    acc,
+                    "battle",
+                    `當前層數 (${currentStage}F) 低於${
+                      isParty ? "隊伍" : ""
+                    }趕路層數 (${runLevel}F)，發送趕路請求...`
+                  );
+                  const runRes = await acc.userObj.run(enableTimeline);
+                  if (runRes) {
+                    safeUpdateProfile(acc, runRes.profile || runRes);
+                    acc.automation.battle.timeline = enableTimeline
+                      ? runRes
+                      : null;
+
+                    let logMsg = `趕路成功！結果: ${
+                      runRes.winner || "未知"
+                    }, 經驗值: ${runRes.exp || 0}, 獲得金幣: ${
+                      runRes.gold || 0
+                    }`;
+                    if (runRes.advance) {
+                      if (runRes.advance.died) {
+                        logMsg += ` [玩家死亡]`;
                       }
                     }
-                    await sleep(11000);
-                    continue;
+                    addLog(acc, "battle", logMsg);
                   }
-                }
-              }
+                } else {
+                  addLog(acc, "battle", "狀態檢查通過，發送狩獵請求...");
+                  const huntRes = await acc.userObj.battle(enableTimeline);
+                  if (huntRes) {
+                    safeUpdateProfile(acc, huntRes.profile || huntRes);
+                    acc.automation.battle.timeline = enableTimeline
+                      ? huntRes
+                      : null;
 
-              const runLevel = isParty
-                ? acc.automation.battle.setting.partyMode?.runLevel || 0
-                : acc.automation.battle.setting.runLevel || 0;
-              const enableTimeline =
-                acc.automation.battle.setting.enableTimeline !== false;
-
-              if (currentStage < runLevel) {
-                addLog(
-                  acc,
-                  "battle",
-                  `當前層數 (${currentStage}F) 低於${
-                    isParty ? "隊伍" : ""
-                  }趕路層數 (${runLevel}F)，發送趕路請求...`
-                );
-                const runRes = await acc.userObj.run(enableTimeline);
-                if (runRes) {
-                  safeUpdateProfile(acc, runRes.profile || runRes);
-                  acc.automation.battle.timeline = enableTimeline
-                    ? runRes
-                    : null;
-
-                  let logMsg = `趕路成功！結果: ${
-                    runRes.winner || "未知"
-                  }, 經驗值: ${runRes.exp || 0}, 獲得金幣: ${runRes.gold || 0}`;
-                  if (runRes.advance) {
-                    if (runRes.advance.died) {
-                      logMsg += ` [玩家死亡]`;
+                    let logMsg = `狩獵成功！結果: ${
+                      huntRes.winner || "未知"
+                    }, 經驗值: ${huntRes.exp || 0}, 獲得金幣: ${
+                      huntRes.gold || 0
+                    }`;
+                    if (huntRes.advance) {
+                      if (huntRes.advance.died) {
+                        logMsg += ` [玩家死亡]`;
+                      }
                     }
+                    addLog(acc, "battle", logMsg);
                   }
-                  addLog(acc, "battle", logMsg);
-                }
-              } else {
-                addLog(acc, "battle", "狀態檢查通過，發送狩獵請求...");
-                const huntRes = await acc.userObj.battle(enableTimeline);
-                if (huntRes) {
-                  safeUpdateProfile(acc, huntRes.profile || huntRes);
-                  acc.automation.battle.timeline = enableTimeline
-                    ? huntRes
-                    : null;
-
-                  let logMsg = `狩獵成功！結果: ${
-                    huntRes.winner || "未知"
-                  }, 經驗值: ${huntRes.exp || 0}, 獲得金幣: ${
-                    huntRes.gold || 0
-                  }`;
-                  if (huntRes.advance) {
-                    if (huntRes.advance.died) {
-                      logMsg += ` [玩家死亡]`;
-                    }
-                  }
-                  addLog(acc, "battle", logMsg);
                 }
               }
             }
