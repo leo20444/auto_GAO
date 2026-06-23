@@ -502,7 +502,7 @@ import {
 import { ElMessage } from "element-plus";
 import { useAccountStore } from "../store/accountStore";
 import moment from "moment";
-import elementBonusMap from "../common/elementBonusTranslation.json";
+import elementBonusMap from "@/common/elementBonusTranslation.json";
 import { Warning } from "@element-plus/icons-vue";
 
 const props = defineProps({
