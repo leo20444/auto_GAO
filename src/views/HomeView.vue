@@ -1,6 +1,10 @@
 <template>
   <div class="home-container">
-    <div v-if="selectedAccount" class="dashboard-container">
+    <div
+      v-if="selectedAccount"
+      :key="selectedAccount.username || selectedAccount.token"
+      class="dashboard-container"
+    >
       <div class="dashboard-header">
         <div class="header-left">
           <h1 class="nickname">{{ selectedAccount.profile.nickname }}</h1>
@@ -44,6 +48,9 @@
           >
           <el-button type="primary" plain @click="refreshProfile"
             >立即重新整理</el-button
+          >
+          <el-button type="info" plain @click="showCredentialsDialog = true"
+            >帳密設定</el-button
           >
         </div>
       </div>
@@ -390,11 +397,69 @@
         <el-button type="primary" @click="triggerAdd">新增第一個帳號</el-button>
       </el-empty>
     </div>
+
+    <!-- 帳密設定對話框 -->
+    <el-dialog
+      v-model="showCredentialsDialog"
+      title="帳號登入與自動重登設定"
+      width="400px"
+      append-to-body
+    >
+      <el-form
+        :model="credForm"
+        label-position="top"
+        @submit.prevent="handleSaveCredentials(true)"
+      >
+        <p
+          style="
+            font-size: 13px;
+            color: var(--text-secondary);
+            margin-bottom: 15px;
+            line-height: 1.5;
+          "
+        >
+          設定此帳號的帳密後，當 Token 過期時 Bot 會自動在背景重新登入獲取新
+          Token，維持掛機不中斷。
+        </p>
+        <el-form-item label="遊戲帳號 (Username)" required>
+          <el-input v-model="credForm.username" placeholder="請輸入遊戲帳號" />
+        </el-form-item>
+        <el-form-item label="遊戲密碼 (Password)" required>
+          <el-input
+            v-model="credForm.password"
+            type="password"
+            placeholder="請輸入遊戲密碼"
+            show-password
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <span
+          class="dialog-footer"
+          style="display: flex; justify-content: space-between; width: 100%"
+        >
+          <el-button @click="showCredentialsDialog = false">取消</el-button>
+          <span>
+            <el-button type="info" plain @click="handleSaveCredentials(false)"
+              >僅儲存</el-button
+            >
+            <el-button
+              type="primary"
+              :loading="isRefreshingToken"
+              @click="handleSaveCredentials(true)"
+            >
+              儲存並重新登入
+            </el-button>
+          </span>
+        </span>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script lang="ts" setup>
-import { ref, computed } from "vue";
+import axios from "axios";
+import { ref, reactive, computed, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { useAccountStore } from "../store/accountStore";
 import { Location } from "@element-plus/icons-vue";
@@ -407,6 +472,94 @@ import moment from "moment";
 const store = useAccountStore();
 const { selectedAccount, refreshAccount } = store;
 const activeTab = ref("battle");
+
+const showCredentialsDialog = ref(false);
+const isRefreshingToken = ref(false);
+const credForm = reactive({
+  username: "",
+  password: "",
+});
+
+watch(
+  () => selectedAccount.value?.token,
+  () => {
+    if (selectedAccount.value) {
+      credForm.username = selectedAccount.value.username || "";
+      credForm.password = selectedAccount.value.password || "";
+    }
+  },
+  { immediate: true }
+);
+
+const handleSaveCredentials = async (relogin = false) => {
+  if (!selectedAccount.value) return;
+
+  selectedAccount.value.username = credForm.username;
+  selectedAccount.value.password = credForm.password;
+
+  if (selectedAccount.value.userObj) {
+    selectedAccount.value.userObj.username = credForm.username;
+    selectedAccount.value.userObj.password = credForm.password;
+  }
+
+  if (relogin) {
+    if (!credForm.username || !credForm.password) {
+      ElMessage.warning("請填寫帳號與密碼以進行重新登入");
+      return;
+    }
+    console.log(
+      "[handleSaveCredentials] 點選儲存並重新登入。帳號:",
+      credForm.username
+    );
+    isRefreshingToken.value = true;
+    try {
+      const res = await axios.post(
+        "https://gunart-backend.onrender.com/api/auth/login",
+        {
+          username: credForm.username,
+          password: credForm.password,
+        }
+      );
+      if (res.data && res.data.token) {
+        console.log(
+          "[handleSaveCredentials] 登入取得新 Token:",
+          res.data.token.slice(0, 15) + "..."
+        );
+        console.log(
+          "[handleSaveCredentials] 準備呼叫 userObj.onTokenRefresh..."
+        );
+        selectedAccount.value.userObj.onTokenRefresh?.(
+          selectedAccount.value.token,
+          res.data.token
+        );
+        console.log(
+          "[handleSaveCredentials] onTokenRefresh 執行完成。目前 selectedAccount.token 已更新"
+        );
+        ElMessage.success("登入成功，已重新獲取 Token 並更新設定！");
+        showCredentialsDialog.value = false;
+      } else {
+        console.error(
+          "[handleSaveCredentials] 重新登入成功但回傳無 Token:",
+          res.data
+        );
+        ElMessage.error("登入失敗：未取得有效的 Token");
+      }
+    } catch (err: any) {
+      console.error("[handleSaveCredentials] 重新登入請求失敗:", err);
+      const errMsg = err.response?.data?.message || err.message || "未知錯誤";
+      ElMessage.error(`登入重刷失敗：${errMsg}`);
+    } finally {
+      isRefreshingToken.value = false;
+    }
+  } else {
+    console.log(
+      "[handleSaveCredentials] 僅儲存帳密（不執行重登）:",
+      credForm.username
+    );
+    ElMessage.success("帳密設定已儲存");
+    showCredentialsDialog.value = false;
+  }
+};
 
 const statusType = computed(() => {
   const status = selectedAccount.value?.profile?.actionStatus;

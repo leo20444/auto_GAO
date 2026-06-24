@@ -2,9 +2,67 @@ import axios from "axios";
 
 const baseurl = "https://gunart-backend.onrender.com/api";
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const globalAxios = axios;
 
-function user(inputToken) {
+function user(inputToken, username = "", password = "") {
   this.token = inputToken;
+  this.username = username;
+  this.password = password;
+  this.onTokenRefresh = null;
+
+  const api = axios.create();
+
+  api.interceptors.request.use(
+    (config) => {
+      const cleanToken = this.token.replace("Bearer ", "");
+      config.headers = config.headers || {};
+      config.headers.Authorization = `Bearer ${cleanToken}`;
+      return config;
+    },
+    (error) => Promise.reject(error)
+  );
+
+  api.interceptors.response.use(
+    (response) => response,
+    async (error) => {
+      const originalRequest = error.config;
+      if (
+        error.response &&
+        error.response.status === 401 &&
+        !originalRequest._retry
+      ) {
+        if (this.username && this.password) {
+          originalRequest._retry = true;
+          try {
+            console.log(
+              `[自動登入] 偵測到 401，嘗試為 ${this.username} 重新登入`
+            );
+            const res = await globalAxios.post(`${baseurl}/auth/login`, {
+              username: this.username,
+              password: this.password,
+            });
+            if (res.data && res.data.token) {
+              const oldToken = this.token;
+              const newToken = res.data.token;
+              this.token = newToken;
+              console.log(`[自動登入] 重新登入成功！新 Token 已套用`);
+
+              if (this.onTokenRefresh) {
+                this.onTokenRefresh(oldToken, newToken);
+              }
+
+              const cleanToken = newToken.replace("Bearer ", "");
+              originalRequest.headers.Authorization = `Bearer ${cleanToken}`;
+              return api(originalRequest);
+            }
+          } catch (loginErr) {
+            console.error("[自動登入] 重新登入失敗:", loginErr);
+          }
+        }
+      }
+      return Promise.reject(error);
+    }
+  );
 
   const getHeaders = () => {
     // 確保 token 不會重複加上 Bearer 字樣
@@ -139,7 +197,7 @@ function user(inputToken) {
 
   this.getAuthMe = async function () {
     try {
-      const res = await axios.get(`${baseurl}/auth/me`, {
+      const res = await api.get(`${baseurl}/auth/me`, {
         headers: getHeaders(),
       });
       return res.data;
@@ -151,7 +209,7 @@ function user(inputToken) {
 
   this.getPartyStatus = async function () {
     try {
-      const res = await axios.get(`${baseurl}/party/status`, {
+      const res = await api.get(`${baseurl}/party/status`, {
         headers: getHeaders(),
       });
       return res.data;
@@ -163,7 +221,7 @@ function user(inputToken) {
 
   this.getTowerStatus = async function () {
     try {
-      const res = await axios.get(`${baseurl}/tower/status`, {
+      const res = await api.get(`${baseurl}/tower/status`, {
         headers: getHeaders(),
       });
       return res.data;
@@ -175,7 +233,7 @@ function user(inputToken) {
 
   this.getProfile = async function () {
     try {
-      const authMeRes = await axios.get(`${baseurl}/auth/me`, {
+      const authMeRes = await api.get(`${baseurl}/auth/me`, {
         headers: getHeaders(),
       });
       const charData = authMeRes.data?.character;
@@ -184,13 +242,13 @@ function user(inputToken) {
         ? new Date(serverTimeStr).getTime() - Date.now()
         : 0;
 
-      const towerRes = await axios.get(`${baseurl}/tower/status`, {
+      const towerRes = await api.get(`${baseurl}/tower/status`, {
         headers: getHeaders(),
       });
 
       let activeJob = null;
       try {
-        const jobsRes = await axios.get(`${baseurl}/forge/jobs`, {
+        const jobsRes = await api.get(`${baseurl}/forge/jobs`, {
           headers: getHeaders(),
         });
         activeJob = jobsRes.data?.jobs?.[0];
@@ -200,7 +258,7 @@ function user(inputToken) {
 
       let mineStatus = null;
       try {
-        const mineRes = await axios.get(`${baseurl}/town/mine/status`, {
+        const mineRes = await api.get(`${baseurl}/town/mine/status`, {
           headers: getHeaders(),
         });
         mineStatus = mineRes.data;
@@ -226,7 +284,7 @@ function user(inputToken) {
 
   this.rest = async function () {
     try {
-      await axios.post(
+      await api.post(
         `${baseurl}/tower/rest/start`,
         {},
         { headers: getHeaders() }
@@ -244,7 +302,7 @@ function user(inputToken) {
 
   this.restComplete = async function () {
     try {
-      await axios.post(
+      await api.post(
         `${baseurl}/tower/rest/stop`,
         {},
         { headers: getHeaders() }
@@ -262,11 +320,7 @@ function user(inputToken) {
 
   this.moveComplete = async function () {
     try {
-      await axios.post(
-        `${baseurl}/tower/arrive`,
-        {},
-        { headers: getHeaders() }
-      );
+      await api.post(`${baseurl}/tower/arrive`, {}, { headers: getHeaders() });
       return this.getProfile();
     } catch (error) {
       console.log(error);
@@ -280,7 +334,7 @@ function user(inputToken) {
 
   this.enterSecretRealm = async function () {
     try {
-      const res = await axios.post(
+      const res = await api.post(
         `${baseurl}/tower/secret-realm/enter`,
         {},
         { headers: getHeaders() }
@@ -299,11 +353,11 @@ function user(inputToken) {
   this.run = async function (enableTimeline = true) {
     try {
       console.log("[API] 發送趕路巡檢，先獲取組隊狀態...");
-      await axios.get(`${baseurl}/party/status`, { headers: getHeaders() });
+      await api.get(`${baseurl}/party/status`, { headers: getHeaders() });
       let chooseRes;
       try {
         console.log("[API] 發送 /tower/choose (run) 請求...");
-        chooseRes = await axios.post(
+        chooseRes = await api.post(
           `${baseurl}/tower/choose`,
           { option: "run" },
           { headers: getHeaders() }
@@ -321,7 +375,7 @@ function user(inputToken) {
           await this.restComplete();
           await sleep(500);
           console.log("[API] 重新發送 /tower/choose (run)...");
-          chooseRes = await axios.post(
+          chooseRes = await api.post(
             `${baseurl}/tower/choose`,
             { option: "run" },
             { headers: getHeaders() }
@@ -336,11 +390,11 @@ function user(inputToken) {
       }
       let timelineRes = null;
       if (enableTimeline) {
-        timelineRes = await axios.get(`${baseurl}/tower/timeline`, {
+        timelineRes = await api.get(`${baseurl}/tower/timeline`, {
           headers: getHeaders(),
         });
       }
-      const advanceRes = await axios.post(
+      const advanceRes = await api.post(
         `${baseurl}/tower/advance`,
         { option: "run" },
         { headers: getHeaders() }
@@ -368,7 +422,7 @@ function user(inputToken) {
 
   this.getTimeline = async function () {
     try {
-      const res = await axios.get(`${baseurl}/tower/timeline`, {
+      const res = await api.get(`${baseurl}/tower/timeline`, {
         headers: getHeaders(),
       });
       return res.data;
@@ -385,11 +439,11 @@ function user(inputToken) {
   this.battle = async function (enableTimeline = true) {
     try {
       console.log("[API] 發送戰鬥巡檢，先獲取組隊狀態...");
-      await axios.get(`${baseurl}/party/status`, { headers: getHeaders() });
+      await api.get(`${baseurl}/party/status`, { headers: getHeaders() });
       let chooseRes;
       try {
         console.log("[API] 發送 /tower/choose (fight) 請求...");
-        chooseRes = await axios.post(
+        chooseRes = await api.post(
           `${baseurl}/tower/choose`,
           { option: "fight" },
           { headers: getHeaders() }
@@ -407,7 +461,7 @@ function user(inputToken) {
           await this.restComplete();
           await sleep(500);
           console.log("[API] 重新發送 /tower/choose (fight)...");
-          chooseRes = await axios.post(
+          chooseRes = await api.post(
             `${baseurl}/tower/choose`,
             { option: "fight" },
             { headers: getHeaders() }
@@ -422,11 +476,11 @@ function user(inputToken) {
       }
       let timelineRes = null;
       if (enableTimeline) {
-        timelineRes = await axios.get(`${baseurl}/tower/timeline`, {
+        timelineRes = await api.get(`${baseurl}/tower/timeline`, {
           headers: getHeaders(),
         });
       }
-      const advanceRes = await axios.post(
+      const advanceRes = await api.post(
         `${baseurl}/tower/advance`,
         { option: "fight" },
         { headers: getHeaders() }
@@ -455,7 +509,7 @@ function user(inputToken) {
   this.move = async function (id) {
     try {
       const zoneKey = zoneMapping[id] || id;
-      await axios.post(
+      await api.post(
         `${baseurl}/tower/move`,
         { destination: zoneKey },
         { headers: getHeaders() }
@@ -473,7 +527,7 @@ function user(inputToken) {
 
   this.path = async function (id) {
     try {
-      await axios.post(
+      await api.post(
         `${baseurl}/tower/path`,
         { pathId: id },
         { headers: getHeaders() }
@@ -487,7 +541,7 @@ function user(inputToken) {
 
   this.equip = async function (id) {
     try {
-      await axios.post(
+      await api.post(
         `${baseurl}/equip`,
         { crafted_eq_id: id },
         { headers: getHeaders() }
@@ -502,7 +556,7 @@ function user(inputToken) {
 
   this.unEquip = async function (id) {
     try {
-      const currentlyEquippedRes = await axios.get(`${baseurl}/equip`, {
+      const currentlyEquippedRes = await api.get(`${baseurl}/equip`, {
         headers: getHeaders(),
       });
       const equipment = currentlyEquippedRes.data.equipment || {};
@@ -515,7 +569,7 @@ function user(inputToken) {
       }
 
       if (targetSlot) {
-        await axios.delete(`${baseurl}/equip/${targetSlot}`, {
+        await api.delete(`${baseurl}/equip/${targetSlot}`, {
           headers: getHeaders(),
         });
       }
@@ -530,13 +584,13 @@ function user(inputToken) {
 
   this.unEquipAll = async function () {
     try {
-      const currentlyEquippedRes = await axios.get(`${baseurl}/equip`, {
+      const currentlyEquippedRes = await api.get(`${baseurl}/equip`, {
         headers: getHeaders(),
       });
       const equipment = currentlyEquippedRes.data.equipment || {};
       for (const [slot, item] of Object.entries(equipment)) {
         if (item && item.id) {
-          await axios.delete(`${baseurl}/equip/${slot}`, {
+          await api.delete(`${baseurl}/equip/${slot}`, {
             headers: getHeaders(),
           });
         }
@@ -551,13 +605,13 @@ function user(inputToken) {
 
   this.item = async function () {
     try {
-      const invRes = await axios.get(`${baseurl}/inventory`, {
+      const invRes = await api.get(`${baseurl}/inventory`, {
         headers: getHeaders(),
       });
-      const equipRes = await axios.get(`${baseurl}/forge/equipment`, {
+      const equipRes = await api.get(`${baseurl}/forge/equipment`, {
         headers: getHeaders(),
       });
-      const currentlyEquippedRes = await axios.get(`${baseurl}/equip`, {
+      const currentlyEquippedRes = await api.get(`${baseurl}/equip`, {
         headers: getHeaders(),
       });
 
@@ -641,7 +695,7 @@ function user(inputToken) {
 
   this.huntInfo = async function () {
     try {
-      const res = await axios.get(`${baseurl}/battles/info`, {
+      const res = await api.get(`${baseurl}/battles/info`, {
         headers: getHeaders(),
       });
       return res.data;
@@ -654,7 +708,7 @@ function user(inputToken) {
   this.forge = async function (payload) {
     try {
       console.log("[API] 發起鍛造，payload:", JSON.stringify(payload));
-      const res = await axios.post(`${baseurl}/forge/craft`, payload, {
+      const res = await api.post(`${baseurl}/forge/craft`, payload, {
         headers: getHeaders(),
       });
       console.log("[API] 鍛造結果狀態:", res.status, res.data);
@@ -680,7 +734,7 @@ function user(inputToken) {
 
   this.getForgeRecipes = async function () {
     try {
-      const res = await axios.get(`${baseurl}/forge/recipes`, {
+      const res = await api.get(`${baseurl}/forge/recipes`, {
         headers: getHeaders(),
       });
       return res.data;
@@ -694,7 +748,7 @@ function user(inputToken) {
     try {
       let jobId = id;
       if (!jobId) {
-        const jobsRes = await axios.get(`${baseurl}/forge/jobs`, {
+        const jobsRes = await api.get(`${baseurl}/forge/jobs`, {
           headers: getHeaders(),
         });
         const activeJob = jobsRes.data?.jobs?.[0];
@@ -707,7 +761,7 @@ function user(inputToken) {
         throw new Error("找不到可領取的鍛造任務");
       }
 
-      await axios.post(
+      await api.post(
         `${baseurl}/forge/collect/${jobId}`,
         {},
         { headers: getHeaders() }
@@ -721,7 +775,7 @@ function user(inputToken) {
 
   this.recycle = async function (id) {
     try {
-      await axios.post(
+      await api.post(
         `${baseurl}/forge/recycle/${id}`,
         {},
         { headers: getHeaders() }
@@ -736,7 +790,7 @@ function user(inputToken) {
 
   this.eatMedicine = async function (id) {
     try {
-      await axios.post(
+      await api.post(
         `${baseurl}/inventory/use/${id}`,
         {},
         { headers: getHeaders() }
@@ -752,7 +806,7 @@ function user(inputToken) {
 
   this.getMineStatus = async function () {
     try {
-      const res = await axios.get(`${baseurl}/town/mine/status`, {
+      const res = await api.get(`${baseurl}/town/mine/status`, {
         headers: getHeaders(),
       });
       return res.data;
@@ -764,7 +818,7 @@ function user(inputToken) {
 
   this.startMining = async function (zoneKey) {
     try {
-      const res = await axios.post(
+      const res = await api.post(
         `${baseurl}/town/mine/start`,
         { zone: zoneKey },
         { headers: getHeaders() }
@@ -778,7 +832,7 @@ function user(inputToken) {
 
   this.collectMine = async function () {
     try {
-      const res = await axios.post(
+      const res = await api.post(
         `${baseurl}/town/mine/collect`,
         {},
         { headers: getHeaders() }
@@ -792,7 +846,7 @@ function user(inputToken) {
 
   this.fightBoss = async function () {
     try {
-      const res = await axios.post(
+      const res = await api.post(
         `${baseurl}/tower/boss`,
         {},
         { headers: getHeaders() }
@@ -810,7 +864,7 @@ function user(inputToken) {
 
   this.buyShopItem = async function (shopItemId, quantity = 1) {
     try {
-      const res = await axios.post(
+      const res = await api.post(
         `${baseurl}/town/shop/buy`,
         { shopItemId, quantity },
         { headers: getHeaders() }
@@ -827,7 +881,7 @@ function user(inputToken) {
 
   this.useTeleportCrystal = async function () {
     try {
-      const res = await axios.post(
+      const res = await api.post(
         `${baseurl}/inventory/use/173`,
         { fillToFull: true },
         { headers: getHeaders() }
@@ -844,7 +898,7 @@ function user(inputToken) {
 
   this.collectLottery = async function () {
     try {
-      const res = await axios.post(
+      const res = await api.post(
         `${baseurl}/town/lottery/collect`,
         {},
         { headers: getHeaders() }
@@ -852,7 +906,7 @@ function user(inputToken) {
       return res.data;
     } catch (error) {
       try {
-        const res = await axios.get(`${baseurl}/town/lottery/collect`, {
+        const res = await api.get(`${baseurl}/town/lottery/collect`, {
           headers: getHeaders(),
         });
         return res.data;
@@ -868,7 +922,7 @@ function user(inputToken) {
 
   this.buyLottery = async function () {
     try {
-      const res = await axios.post(
+      const res = await api.post(
         `${baseurl}/town/lottery/buy`,
         {},
         { headers: getHeaders() }

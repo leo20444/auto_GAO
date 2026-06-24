@@ -291,7 +291,6 @@ const handleRecycle = async () => {
 
     try {
       await props.userObj.recycle(recycleAry[i].id);
-      console.log(`正在回收 ID: ${recycleAry[i].id}`);
     } catch (e) {
       console.error(`回收 ID: ${recycleAry[i].id} 失敗`, e);
     }

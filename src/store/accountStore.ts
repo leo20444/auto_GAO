@@ -32,6 +32,8 @@ export interface LogItem {
 export interface Account {
   token: string;
   userObj: any;
+  username?: string;
+  password?: string;
   profile: any;
   isActive: boolean;
   automation: {
@@ -142,22 +144,31 @@ const knownItemNames = reactive<Record<number, string>>({
   126: "紫水晶",
 });
 
-// 從 localStorage 載入
-const savedTokens = JSON.parse(localStorage.getItem("strList") || "[]");
-savedTokens.forEach((token: string) => {
-  addAccount(token);
+// 從 localStorage 載入，支援舊版 Token 字串陣列與新版包含帳密的物件陣列
+const savedAccounts = JSON.parse(localStorage.getItem("strList") || "[]");
+savedAccounts.forEach((item: any) => {
+  if (typeof item === "string") {
+    addAccount(item);
+  } else if (item && item.token) {
+    addAccount(item.token, item.username || "", item.password || "");
+  }
 });
 
 // 當帳號列表或任何設定變更時儲存到 localStorage
 watch(
   accounts,
   () => {
-    // 儲存 Token 陣列
-    const tokens = accounts.map((acc) => acc.token);
-    localStorage.setItem("strList", JSON.stringify(tokens));
+    // 儲存帳號基本資訊清單，保留帳密以供下次啟動時順利還原對應關係
+    const accountInfos = accounts.map((acc) => ({
+      token: acc.token,
+      username: acc.username || "",
+      password: acc.password || "",
+    }));
+    localStorage.setItem("strList", JSON.stringify(accountInfos));
 
     // 儲存個別帳號的自動化設定
     accounts.forEach((acc) => {
+      const accountId = acc.username || acc.token;
       const userSetting = {
         setting: {
           ...acc.automation.battle.setting,
@@ -178,8 +189,10 @@ watch(
           duration: acc.automation.mining.setting?.duration ?? 15,
         },
         lottery: acc.automation.lottery,
+        username: acc.username || "",
+        password: acc.password || "",
       };
-      localStorage.setItem(`setting_${acc.token}`, JSON.stringify(userSetting));
+      localStorage.setItem(`setting_${accountId}`, JSON.stringify(userSetting));
     });
   },
   { deep: true }
@@ -221,13 +234,24 @@ async function refreshAccountState(acc: Account, forceAll = false) {
   }
 }
 
-function addAccount(token: string) {
-  if (accounts.some((acc) => acc.token === token)) return;
+function addAccount(token: string, username = "", password = "") {
+  // 將 username (優先) 或 token 作為此帳號在系統中的唯一識別 accountId
+  const accountId = username || token;
+  console.log("[addAccount] 開始呼叫:", {
+    token: token.slice(0, 15) + "...",
+    username,
+    accountId,
+  });
+  if (accounts.some((acc) => (acc.username || acc.token) === accountId)) {
+    console.warn(`[addAccount] 帳號 ${accountId} 已存在於列表中，略過新增`);
+    return;
+  }
 
-  const userObj = new user(token);
-
-  // 載入 localStorage 設定
-  const savedSettingRaw = localStorage.getItem(`setting_${token}`);
+  // 載入 localStorage 設定，優先使用 accountId 尋找，無則 fallback 嘗試以 token 尋找 (相容舊資料)
+  let savedSettingRaw = localStorage.getItem(`setting_${accountId}`);
+  if (!savedSettingRaw && username) {
+    savedSettingRaw = localStorage.getItem(`setting_${token}`);
+  }
   let savedSetting: any = {};
   try {
     if (savedSettingRaw) {
@@ -244,9 +268,82 @@ function addAccount(token: string) {
     console.error("載入帳號設定失敗", e);
   }
 
+  const finalUsername = username || savedSetting.username || "";
+  const finalPassword = password || savedSetting.password || "";
+
+  const userObj = new user(token, finalUsername, finalPassword);
+
+  userObj.onTokenRefresh = (oldToken: string, newToken: string) => {
+    console.log("[onTokenRefresh] 事件觸發:", {
+      oldToken: oldToken.slice(0, 15) + "...",
+      newToken: newToken.slice(0, 15) + "...",
+    });
+    const acc = accounts.find((a) => a.token === oldToken);
+    if (acc) {
+      const oldAccountId = acc.username || oldToken;
+      const newAccountId = acc.username || newToken;
+      console.log(
+        "[onTokenRefresh] 尋找到對應帳號:",
+        acc.username || "無帳號名稱",
+        { oldAccountId, newAccountId }
+      );
+
+      if (oldAccountId !== newAccountId) {
+        console.log("[onTokenRefresh] 準備遷移舊 Key 資料到新 Key:", {
+          oldAccountId,
+          newAccountId,
+        });
+        // 1. 遷移 localStorage setting
+        const oldSettings = localStorage.getItem(`setting_${oldAccountId}`);
+        if (oldSettings) {
+          localStorage.setItem(`setting_${newAccountId}`, oldSettings);
+          localStorage.removeItem(`setting_${oldAccountId}`);
+          console.log("[onTokenRefresh] 已移轉 setting 設定");
+        }
+
+        // 2. 遷移 localStorage forge favorites
+        const oldFavorites = localStorage.getItem(
+          `forge_favorites_${oldAccountId}`
+        );
+        if (oldFavorites) {
+          localStorage.setItem(`forge_favorites_${newAccountId}`, oldFavorites);
+          localStorage.removeItem(`forge_favorites_${oldAccountId}`);
+          console.log("[onTokenRefresh] 已移轉 forge favorites 收藏設定");
+        }
+      } else {
+        console.log(
+          "[onTokenRefresh] accountId 沒有改變，不需執行 LocalStorage Key 移轉"
+        );
+      }
+
+      // 3. 更新 userObj 內部的 token
+      acc.userObj.token = newToken;
+      // 4. 更新 memory 中的 token 欄位。這會觸發 watch(accounts) 自動將新設定寫入 setting_${newAccountId} 且更新 strList 列表
+      acc.token = newToken;
+      console.log(
+        "[onTokenRefresh] 已更新記憶體與 userObj 的 Token 值為新 Token"
+      );
+
+      // 5. 立即重新整理帳號狀態以刷新 UI 暱稱等資料
+      refreshAccountState(acc, true);
+
+      ElMessage.success(
+        `帳號 ${
+          acc.profile?.nickname || acc.username || "Unknown"
+        } Token 已過期，已自動重新登入並更新！`
+      );
+    } else {
+      console.error(
+        "[onTokenRefresh] 錯誤：在 accounts 陣列中找不到帶有舊 Token 的帳號！無法執行移轉"
+      );
+    }
+  };
+
   const account = reactive<Account>({
     token,
     userObj,
+    username: finalUsername,
+    password: finalPassword,
     profile: {
       nickname: "載入中...",
       hp: 0,
@@ -359,9 +456,20 @@ function addAccount(token: string) {
     },
   });
 
+  console.log(
+    "[addAccount] 準備推入 accounts 陣列, 當前 accounts 數量:",
+    accounts.length
+  );
   accounts.push(account);
+  console.log(
+    "[addAccount] 已推入 accounts, 目前數量:",
+    accounts.length,
+    "列表內容:",
+    accounts.map((a) => a.username || a.token)
+  );
   if (selectedAccountIndex.value === -1) {
     selectedAccountIndex.value = 0;
+    console.log("[addAccount] selectedAccountIndex 初始化為 0");
   }
 
   // 初始化讀取個人資料與 Token 身份驗證
@@ -466,9 +574,6 @@ async function startBattle(token: string) {
     ) {
       try {
         if (acc.automation.battle.loopId !== currentLoopId) break;
-        console.log(
-          `[自動戰鬥輪詢] ${acc.profile.name || acc.token} - 開始回合檢查...`
-        );
         addLog(acc, "battle", "開始戰鬥回合檢查...");
 
         // 1. 取得最新個人資料與背包裝備、組隊資訊、地圖資訊
@@ -500,11 +605,6 @@ async function startBattle(token: string) {
             );
             // sleep for remaining travel time plus 2 seconds buffer, max 5 minutes (300000ms)
             waitTime = Math.min(300000, Math.max(11000, remainingMs + 2000));
-            console.log(
-              `[移動等待] ${acc.profile.name} - 移動剩餘時間: ${Math.ceil(
-                remainingMs / 1000
-              )} 秒 | 伺服器同步對齊等待: ${Math.ceil(waitTime / 1000)} 秒`
-            );
           }
           await sleep(waitTime);
           if (acc.automation.battle.loopId !== currentLoopId) break;
@@ -954,13 +1054,6 @@ async function startBattle(token: string) {
                       waitTime = Math.min(
                         300000,
                         Math.max(11000, remainingMs + 2000)
-                      );
-                      console.log(
-                        `[組隊回城] ${
-                          acc.profile.name
-                        } 移動剩餘時間: ${Math.ceil(
-                          remainingMs / 1000
-                        )} 秒 | 全員對齊等待: ${Math.ceil(waitTime / 1000)} 秒`
                       );
                     }
 
@@ -1778,6 +1871,15 @@ setInterval(async () => {
 }, 20000);
 
 function removeAccount(index: number) {
+  const acc = accounts[index];
+  if (acc) {
+    const accountId = acc.username || acc.token;
+    localStorage.removeItem(`setting_${accountId}`);
+    localStorage.removeItem(`forge_favorites_${accountId}`);
+    // 同時嘗試清除以舊 token 為名的資料
+    localStorage.removeItem(`setting_${acc.token}`);
+    localStorage.removeItem(`forge_favorites_${acc.token}`);
+  }
   accounts.splice(index, 1);
   if (selectedAccountIndex.value >= accounts.length) {
     selectedAccountIndex.value = accounts.length - 1;

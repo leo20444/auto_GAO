@@ -815,7 +815,12 @@ const groupedFavorites = computed(() => {
 
 const loadFavorites = () => {
   if (!props.userObj?.token) return;
-  const stored = localStorage.getItem(`forge_favorites_${props.userObj.token}`);
+  const accountId = props.userObj.username || props.userObj.token;
+  let stored = localStorage.getItem(`forge_favorites_${accountId}`);
+  if (!stored && props.userObj.username) {
+    // fallback 讀取舊 Token 為 Key 的收藏
+    stored = localStorage.getItem(`forge_favorites_${props.userObj.token}`);
+  }
   if (stored) {
     try {
       const parsed = JSON.parse(stored);
@@ -841,8 +846,9 @@ const loadFavorites = () => {
 
 const saveFavoritesToStorage = () => {
   if (!props.userObj?.token) return;
+  const accountId = props.userObj.username || props.userObj.token;
   localStorage.setItem(
-    `forge_favorites_${props.userObj.token}`,
+    `forge_favorites_${accountId}`,
     JSON.stringify(favorites.value)
   );
 };

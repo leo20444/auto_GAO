@@ -1,4 +1,5 @@
 <script lang="ts" setup>
+import axios from "axios";
 import { ref, reactive, onMounted, onUnmounted, watch } from "vue";
 import { secretRealmConfig } from "./common/mapping";
 import { RouterView } from "vue-router";
@@ -14,21 +15,106 @@ const {
   selectAccount,
 } = useAccountStore();
 
+const addAccountDialogVisible = ref(false);
+const addAccountActiveTab = ref("login");
+const loginForm = reactive({
+  username: "",
+  password: "",
+});
+const tokenForm = reactive({
+  token: "",
+});
+const isLoggingIn = ref(false);
+
 const handleAddAccount = () => {
-  ElMessageBox.prompt("請輸入新的 Token", "新增帳號", {
-    confirmButtonText: "新增",
-    cancelButtonText: "取消",
-    inputPlaceholder: "eyJhbGci...",
-  })
-    .then(({ value }) => {
-      if (value) {
-        addAccount(value);
-        ElMessage.success("帳號已新增");
+  addAccountDialogVisible.value = true;
+};
+
+const submitAddAccount = async () => {
+  if (addAccountActiveTab.value === "login") {
+    if (!loginForm.username || !loginForm.password) {
+      ElMessage.warning("請填寫帳號與密碼");
+      return;
+    }
+    isLoggingIn.value = true;
+    try {
+      console.log(
+        "[submitAddAccount] 開始進行帳密驗證登入:",
+        loginForm.username
+      );
+      const res = await axios.post(
+        "https://gunart-backend.onrender.com/api/auth/login",
+        {
+          username: loginForm.username,
+          password: loginForm.password,
+        }
+      );
+      if (res.data && res.data.token) {
+        console.log(
+          "[submitAddAccount] 登入驗證成功，取得 Token。準備呼叫 store 的 addAccount。目前帳號數:",
+          accounts.length
+        );
+        addAccount(res.data.token, loginForm.username, loginForm.password);
+        console.log(
+          "[submitAddAccount] addAccount 呼叫完畢。目前帳號數:",
+          accounts.length,
+          "帳號清單:",
+          accounts.map((a) => a.username || a.token)
+        );
+
+        // 自動選中為當前帳號
+        selectedAccountIndex.value = accounts.length - 1;
+        console.log(
+          "[submitAddAccount] 設定 selectedAccountIndex 為:",
+          selectedAccountIndex.value
+        );
+
+        ElMessage.success("帳號登入成功並已新增");
+        addAccountDialogVisible.value = false;
+        loginForm.username = "";
+        loginForm.password = "";
+      } else {
+        console.error(
+          "[submitAddAccount] 登入失敗，回傳資料中未含 Token",
+          res.data
+        );
+        ElMessage.error("登入失敗：未取得有效的 Token");
       }
-    })
-    .catch(() => {
-      // User cancelled or closed the prompt
-    });
+    } catch (err: any) {
+      const errMsg = err.response?.data?.message || err.message || "未知錯誤";
+      console.error("[submitAddAccount] 登入請求異常:", err);
+      ElMessage.error(`登入失敗：${errMsg}`);
+    } finally {
+      isLoggingIn.value = false;
+    }
+  } else {
+    if (!tokenForm.token) {
+      ElMessage.warning("請輸入 Token");
+      return;
+    }
+    console.log(
+      "[submitAddAccount] 開始以 Token 直接新增。目前帳號數:",
+      accounts.length
+    );
+    addAccount(tokenForm.token);
+    console.log(
+      "[submitAddAccount] addAccount (Token) 呼叫完畢。目前帳號數:",
+      accounts.length,
+      "帳號清單:",
+      accounts.map((a) => a.username || a.token)
+    );
+
+    // 自動選中為當前帳號
+    selectedAccountIndex.value = accounts.length - 1;
+    console.log(
+      "[submitAddAccount] 設定 selectedAccountIndex 為:",
+      selectedAccountIndex.value
+    );
+
+    ElMessage.success("帳號已新增");
+    addAccountDialogVisible.value = false;
+    tokenForm.token = "";
+  }
 };
 
 const handleDeleteAccount = (index: number, event: Event) => {
@@ -75,13 +161,20 @@ const handleExport = () => {
   if (exportOptions.settings) {
     const settings: Record<string, any> = {};
     const tokens = JSON.parse(localStorage.getItem("strList") || "[]");
-    tokens.forEach((token: string) => {
-      const stored = localStorage.getItem(`setting_${token}`);
+    tokens.forEach((item: any) => {
+      // 確保將 item 解析為字串，因 item 可能是字串 (舊 token) 或物件 (含帳密)
+      const tokenVal = typeof item === "string" ? item : item.token;
+      const usernameVal = typeof item === "string" ? "" : item.username;
+      const accountId = usernameVal || tokenVal;
+
+      const stored =
+        localStorage.getItem(`setting_${accountId}`) ||
+        localStorage.getItem(`setting_${tokenVal}`);
       if (stored) {
         try {
-          settings[token] = JSON.parse(stored);
+          settings[accountId] = JSON.parse(stored);
         } catch (e) {
-          settings[token] = stored;
+          settings[accountId] = stored;
         }
       }
     });
@@ -91,13 +184,20 @@ const handleExport = () => {
   if (exportOptions.forgeFavorites) {
     const forgeFavorites: Record<string, any> = {};
     const tokens = JSON.parse(localStorage.getItem("strList") || "[]");
-    tokens.forEach((token: string) => {
-      const stored = localStorage.getItem(`forge_favorites_${token}`);
+    tokens.forEach((item: any) => {
+      // 確保將 item 解析為字串，因 item 可能是字串 (舊 token) 或物件 (含帳密)
+      const tokenVal = typeof item === "string" ? item : item.token;
+      const usernameVal = typeof item === "string" ? "" : item.username;
+      const accountId = usernameVal || tokenVal;
+
+      const stored =
+        localStorage.getItem(`forge_favorites_${accountId}`) ||
+        localStorage.getItem(`forge_favorites_${tokenVal}`);
       if (stored) {
         try {
-          forgeFavorites[token] = JSON.parse(stored);
+          forgeFavorites[accountId] = JSON.parse(stored);
         } catch (e) {
-          forgeFavorites[token] = stored;
+          forgeFavorites[accountId] = stored;
         }
       }
     });
@@ -534,7 +634,7 @@ const getAvatarBgColor = (acc: any) => {
         <div class="account-list">
           <el-tooltip
             v-for="(acc, index) in accounts"
-            :key="acc.token"
+            :key="acc.username || acc.token"
             :disabled="!isCollapsed"
             placement="right"
             effect="dark"
@@ -783,7 +883,7 @@ const getAvatarBgColor = (acc: any) => {
           >
             配置備份與還原
           </el-button>
-          <span class="version-text">v1.1.0-Modern</span>
+          <span class="version-text">v1.2.0</span>
         </template>
       </div>
     </el-aside>
@@ -815,7 +915,7 @@ const getAvatarBgColor = (acc: any) => {
             <!-- Account Item -->
             <div
               v-for="(acc, index) in accounts"
-              :key="acc.token"
+              :key="acc.username || acc.token"
               :class="[
                 'account-item',
                 { active: selectedAccountIndex === index },
@@ -944,7 +1044,7 @@ const getAvatarBgColor = (acc: any) => {
           >
             配置備份與還原
           </el-button>
-          <span class="version-text">v1.1.0-Modern</span>
+          <span class="version-text">v1.2.0</span>
         </div>
       </div>
     </el-drawer>
@@ -1073,6 +1173,67 @@ const getAvatarBgColor = (acc: any) => {
         </el-button>
       </el-tab-pane>
     </el-tabs>
+  </el-dialog>
+
+  <!-- 新增帳號對話框 -->
+  <el-dialog
+    v-model="addAccountDialogVisible"
+    title="新增帳號"
+    width="420px"
+    class="add-account-dialog"
+  >
+    <el-tabs v-model="addAccountActiveTab">
+      <el-tab-pane label="帳密登入（推薦，可自動重新登入）" name="login">
+        <el-form
+          :model="loginForm"
+          label-position="top"
+          @submit.prevent="submitAddAccount"
+        >
+          <el-form-item label="遊戲帳號 (Username)" required>
+            <el-input
+              v-model="loginForm.username"
+              placeholder="請輸入遊戲帳號"
+            />
+          </el-form-item>
+          <el-form-item label="遊戲密碼 (Password)" required>
+            <el-input
+              v-model="loginForm.password"
+              type="password"
+              placeholder="請輸入遊戲密碼"
+              show-password
+            />
+          </el-form-item>
+        </el-form>
+      </el-tab-pane>
+      <el-tab-pane label="直接輸入 Token" name="token">
+        <el-form
+          :model="tokenForm"
+          label-position="top"
+          @submit.prevent="submitAddAccount"
+        >
+          <el-form-item label="帳號 Token" required>
+            <el-input
+              v-model="tokenForm.token"
+              placeholder="請貼上 Token 字樣"
+              type="textarea"
+              :rows="4"
+            />
+          </el-form-item>
+        </el-form>
+      </el-tab-pane>
+    </el-tabs>
+    <template #footer>
+      <span class="dialog-footer">
+        <el-button @click="addAccountDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="isLoggingIn"
+          @click="submitAddAccount"
+        >
+          {{ addAccountActiveTab === "login" ? "登入並新增" : "新增" }}
+        </el-button>
+      </span>
+    </template>
   </el-dialog>
 </template>
 
