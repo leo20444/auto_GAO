@@ -2033,7 +2033,6 @@ async function startMarket(token: string) {
   acc.automation.market.running = true;
   const currentLoopId = Date.now();
   acc.automation.market.loopId = currentLoopId;
-  console.log(`[市場搶購] [${acc.username || acc.token}] 啟動自動搶購任務`);
   addLog(acc, "market", "自動市場購買已啟動");
 
   (async () => {
@@ -2056,11 +2055,6 @@ async function startMarket(token: string) {
           acc.automation.market.setting.enableSplitPurchase === true;
 
         if (onlyBuyFromSeller && !sellerName) {
-          console.error(
-            `[市場搶購] [${
-              acc.username || acc.token
-            }] 啟用了指定購買賣家，但未填寫賣家名稱！已自動停止。`
-          );
           addLog(
             acc,
             "market",
@@ -2070,11 +2064,6 @@ async function startMarket(token: string) {
           break;
         }
 
-        console.log(
-          `[市場搶購] [${
-            acc.username || acc.token
-          }] 開始拉取最新市場清單，條件: { 指定賣家: ${onlyBuyFromSeller} ("${sellerName}"), 價格上限: ${priceLimit}, 單次數量限制: ${maxPurchaseQty}, 拆單模式: ${enableSplit} }`
-        );
         addLog(acc, "market", "正在獲取市場交易列表...");
         const res = await acc.userObj.getMarketListings();
 
@@ -2101,12 +2090,6 @@ async function startMarket(token: string) {
             return true;
           });
 
-          console.log(
-            `[市場搶購] [${acc.username || acc.token}] 總商品數: ${
-              res.listings.length
-            }, 篩選後符合搶購條件: ${matchedListings.length}`
-          );
-
           if (matchedListings.length > 0) {
             addLog(
               acc,
@@ -2129,9 +2112,6 @@ async function startMarket(token: string) {
 
               if (buyQty <= 0) continue;
 
-              console.log(
-                `[市場搶購] 準備購買商品: ${item.item_name} x${buyQty} (總量: ${item.quantity}, 單價: ${item.price}, 賣家: ${item.seller_name}, 上架ID: ${item.id})`
-              );
               addLog(
                 acc,
                 "market",
@@ -2151,11 +2131,6 @@ async function startMarket(token: string) {
 
                 const currentBatchQty = buyBatches[i];
                 if (buyBatches.length > 1) {
-                  console.log(
-                    `[市場搶購] [拆單發送] 進度: ${i + 1}/${
-                      buyBatches.length
-                    }, 數量: ${currentBatchQty}`
-                  );
                   addLog(
                     acc,
                     "market",
@@ -2170,9 +2145,6 @@ async function startMarket(token: string) {
                   currentBatchQty
                 );
                 if (buyRes && !buyRes.error) {
-                  console.log(
-                    `[市場搶購] 購買成功! 支付金幣: ${buyRes.total}, 剩餘金幣: ${buyRes.newGold}`
-                  );
                   addLog(
                     acc,
                     "market",
@@ -2182,7 +2154,6 @@ async function startMarket(token: string) {
                     acc.profile.gold = buyRes.newGold;
                   }
                 } else {
-                  console.error(`[市場搶購] 購買失敗:`, buyRes);
                   addLog(
                     acc,
                     "market",
@@ -2207,7 +2178,6 @@ async function startMarket(token: string) {
             addLog(acc, "market", "未找到符合篩選條件的商品。");
           }
         } else {
-          console.error(`[市場搶購] 獲取清單失敗:`, res);
           addLog(
             acc,
             "market",
@@ -2215,7 +2185,6 @@ async function startMarket(token: string) {
           );
         }
       } catch (err: any) {
-        console.error(`[市場搶購] 循環發生錯誤:`, err);
         addLog(acc, "market", `運行出錯: ${err.message || err}`);
       }
 
