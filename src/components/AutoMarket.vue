@@ -3,10 +3,26 @@
     <el-card shadow="never" class="inner-card">
       <el-row :gutter="20">
         <el-col :xs="24" :sm="8" style="margin-bottom: 12px">
-          <div class="input-label">指定購買賣家</div>
+          <div
+            class="input-label"
+            style="display: flex; align-items: center; gap: 8px"
+          >
+            <el-checkbox v-model="marketSetting.onlyBuyFromSeller"
+              >指定購買賣家</el-checkbox
+            >
+            <el-tooltip
+              content="勾選後，系統只會購買該賣家的商品。若未勾選則視為不限制賣家。啟用了此選項但沒填寫賣家名稱時會觸發啟動防呆攔截。"
+              placement="top"
+            >
+              <el-icon style="cursor: pointer; color: #909399"
+                ><InfoFilled
+              /></el-icon>
+            </el-tooltip>
+          </div>
           <el-input
             v-model="marketSetting.sellerName"
-            placeholder="例如：敲敲敲 (留空不限制)"
+            placeholder="例如：敲敲敲 (請先勾選指定)"
+            :disabled="!marketSetting.onlyBuyFromSeller"
             clearable
           />
         </el-col>
@@ -148,10 +164,11 @@ const marketSetting = computed(() => {
   return (
     account.value?.automation.market.setting || {
       sellerName: "",
+      onlyBuyFromSeller: false,
       priceLimit: 0,
       interval: 5,
       maxPurchaseQty: 0,
-      enableSplitPurchase: false,
+      enableSplitPurchase: true,
     }
   );
 });

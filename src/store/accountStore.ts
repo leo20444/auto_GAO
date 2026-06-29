@@ -128,6 +128,7 @@ export interface Account {
       logs: LogItem[];
       setting: {
         sellerName: string;
+        onlyBuyFromSeller: boolean;
         priceLimit: number;
         interval: number;
         maxPurchaseQty: number;
@@ -202,11 +203,13 @@ watch(
         lottery: acc.automation.lottery,
         marketSetting: {
           sellerName: acc.automation.market.setting?.sellerName ?? "",
+          onlyBuyFromSeller:
+            acc.automation.market.setting?.onlyBuyFromSeller ?? false,
           priceLimit: acc.automation.market.setting?.priceLimit ?? 0,
           interval: acc.automation.market.setting?.interval ?? 5,
           maxPurchaseQty: acc.automation.market.setting?.maxPurchaseQty ?? 0,
           enableSplitPurchase:
-            acc.automation.market.setting?.enableSplitPurchase ?? false,
+            acc.automation.market.setting?.enableSplitPurchase ?? true,
         },
         username: acc.username || "",
         password: acc.password || "",
@@ -450,11 +453,13 @@ function addAccount(token: string, username = "", password = "") {
         logs: [],
         setting: {
           sellerName: savedSetting.marketSetting?.sellerName ?? "",
+          onlyBuyFromSeller:
+            savedSetting.marketSetting?.onlyBuyFromSeller ?? false,
           priceLimit: savedSetting.marketSetting?.priceLimit ?? 0,
           interval: savedSetting.marketSetting?.interval ?? 5,
           maxPurchaseQty: savedSetting.marketSetting?.maxPurchaseQty ?? 0,
           enableSplitPurchase:
-            savedSetting.marketSetting?.enableSplitPurchase ?? false,
+            savedSetting.marketSetting?.enableSplitPurchase ?? true,
         },
       },
     },
@@ -2039,6 +2044,8 @@ async function startMarket(token: string) {
       try {
         if (acc.automation.market.loopId !== currentLoopId) break;
 
+        const onlyBuyFromSeller =
+          acc.automation.market.setting.onlyBuyFromSeller === true;
         const sellerName =
           acc.automation.market.setting.sellerName?.trim() || "";
         const priceLimit =
@@ -2048,10 +2055,25 @@ async function startMarket(token: string) {
         const enableSplit =
           acc.automation.market.setting.enableSplitPurchase === true;
 
+        if (onlyBuyFromSeller && !sellerName) {
+          console.error(
+            `[市場搶購] [${
+              acc.username || acc.token
+            }] 啟用了指定購買賣家，但未填寫賣家名稱！已自動停止。`
+          );
+          addLog(
+            acc,
+            "market",
+            "錯誤：啟用了指定購買賣家，但未填寫賣家名稱！自動搶購已停止。"
+          );
+          stopMarket(token);
+          break;
+        }
+
         console.log(
           `[市場搶購] [${
             acc.username || acc.token
-          }] 開始拉取最新市場清單，條件: { 賣家: "${sellerName}", 價格上限: ${priceLimit}, 單次數量限制: ${maxPurchaseQty}, 拆單模式: ${enableSplit} }`
+          }] 開始拉取最新市場清單，條件: { 指定賣家: ${onlyBuyFromSeller} ("${sellerName}"), 價格上限: ${priceLimit}, 單次數量限制: ${maxPurchaseQty}, 拆單模式: ${enableSplit} }`
         );
         addLog(acc, "market", "正在獲取市場交易列表...");
         const res = await acc.userObj.getMarketListings();
@@ -2066,7 +2088,12 @@ async function startMarket(token: string) {
             if (myNickname && item.seller_name === myNickname) return false;
 
             // 賣家過濾 (精確匹配，去空白)
-            if (sellerName && item.seller_name !== sellerName) return false;
+            if (
+              onlyBuyFromSeller &&
+              sellerName &&
+              item.seller_name !== sellerName
+            )
+              return false;
 
             // 價格過濾
             if (priceLimit > 0 && item.price > priceLimit) return false;
