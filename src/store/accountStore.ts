@@ -204,7 +204,7 @@ watch(
         marketSetting: {
           sellerName: acc.automation.market.setting?.sellerName ?? "",
           onlyBuyFromSeller:
-            acc.automation.market.setting?.onlyBuyFromSeller ?? false,
+            acc.automation.market.setting?.onlyBuyFromSeller ?? true,
           priceLimit: acc.automation.market.setting?.priceLimit ?? 0,
           interval: acc.automation.market.setting?.interval ?? 5,
           maxPurchaseQty: acc.automation.market.setting?.maxPurchaseQty ?? 0,
@@ -454,7 +454,7 @@ function addAccount(token: string, username = "", password = "") {
         setting: {
           sellerName: savedSetting.marketSetting?.sellerName ?? "",
           onlyBuyFromSeller:
-            savedSetting.marketSetting?.onlyBuyFromSeller ?? false,
+            savedSetting.marketSetting?.onlyBuyFromSeller ?? true,
           priceLimit: savedSetting.marketSetting?.priceLimit ?? 0,
           interval: savedSetting.marketSetting?.interval ?? 5,
           maxPurchaseQty: savedSetting.marketSetting?.maxPurchaseQty ?? 0,

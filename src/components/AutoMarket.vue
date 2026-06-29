@@ -164,7 +164,7 @@ const marketSetting = computed(() => {
   return (
     account.value?.automation.market.setting || {
       sellerName: "",
-      onlyBuyFromSeller: false,
+      onlyBuyFromSeller: true,
       priceLimit: 0,
       interval: 5,
       maxPurchaseQty: 0,
