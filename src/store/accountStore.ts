@@ -636,21 +636,20 @@ async function startBattle(token: string) {
         const selectArmorList = acc.automation.battle.selectedArmorQueue || [];
 
         // 2. 初始化 weaponChecker
+        // 方案D：callback 為空函式，Store 佇列永遠保留使用者原始設定，
+        // weaponChecker 僅操作自身的工作副本（每輪 new 時從 Store 重新讀取）
         const myWeaponChecker = new weaponChecker(
           acc.automation.battle.setting,
           weaponList,
           selectWeaponListMain,
           selectWeaponListOff,
           selectArmorList,
-          (newList: any) => {
-            acc.automation.battle.selectedWeaponQueueMain = newList;
-          },
-          (newList: any) => {
-            acc.automation.battle.selectedWeaponQueueOff = newList;
-          },
-          (newList: any) => {
-            acc.automation.battle.selectedArmorQueue = newList;
-          },
+          // eslint-disable-next-line @typescript-eslint/no-empty-function
+          () => {},
+          // eslint-disable-next-line @typescript-eslint/no-empty-function
+          () => {},
+          // eslint-disable-next-line @typescript-eslint/no-empty-function
+          () => {},
           acc.automation.battle.weaponCheckTag,
           acc.automation.battle.armorCheckTag,
           acc.userObj
