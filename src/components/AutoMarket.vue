@@ -21,7 +21,7 @@
           </div>
           <el-input
             v-model="marketSetting.sellerName"
-            placeholder="例如：敲敲敲 (請先勾選指定)"
+            placeholder="例如：玩家名稱 (請先勾選指定)"
             :disabled="!marketSetting.onlyBuyFromSeller"
             clearable
           />
